@@ -1,0 +1,9 @@
+# Build
+bin/
+*.test
+
+# Local runtime state
+state/
+
+# IDE
+.DS_Store
