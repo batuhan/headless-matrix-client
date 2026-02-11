@@ -8,7 +8,7 @@ HTTP API server that implements a Beeper Desktop API-compatible surface on top o
 - Exposes Beeper-compatible routes with Bearer token auth
 - Maps gomuks rooms/events into Beeper chat/message/account schemas
 - Supports asset upload/download/serve endpoints
-- Exposes unsupported routes as explicit `501 NOT_IMPLEMENTED`
+- Uses Matrix room/account data (`m.tag`, `com.beeper.mute`, `com.beeper.inbox.done`, `com.beeper.chats.reminder`) to enrich chat state
 
 ## Run
 
@@ -27,4 +27,5 @@ BEEPER_ACCESS_TOKEN=your_token go run ./cmd/server
 
 - The server imports and runs `go.mau.fi/gomuks` as a library.
 - Local bridge account discovery is sourced from `com.beeper.local_bridge_state` account-data with session fallback.
-- `v0` aliases are exposed for compatible endpoints where defined in Beeper Desktop API spec.
+- `v0` aliases are intentionally not exposed.
+- Requests are accepted only for Beeper homeserver sessions (`matrix.beeper.com`, staging, dev).

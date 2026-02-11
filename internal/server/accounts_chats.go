@@ -33,6 +33,7 @@ const roomSelectBaseQuery = `
 `
 
 const roomSelectSortedQuery = roomSelectBaseQuery + `WHERE sorting_timestamp > 0 AND room_type<>'m.space' ORDER BY sorting_timestamp DESC, room_id ASC`
+const roomAccountDataSelectQuery = `SELECT room_id, type, content FROM room_account_data WHERE user_id = $1`
 
 type localBridgeDeviceState struct {
 	State string `json:"state"`
@@ -50,6 +51,18 @@ type accountLookup struct {
 	Accounts []compat.Account
 	ByID     map[string]compat.Account
 	ByBridge map[string][]compat.Account
+}
+
+type roomAccountDataState struct {
+	IsArchived    bool
+	IsMuted       bool
+	IsPinned      bool
+	IsLowPriority bool
+}
+
+type beeperInboxDoneContent struct {
+	UpdatedTS *int64 `json:"updated_ts,omitempty"`
+	AtOrder   *int64 `json:"at_order,omitempty"`
 }
 
 func (s *Server) getAccounts(w http.ResponseWriter, r *http.Request) error {
@@ -215,6 +228,10 @@ func (s *Server) listChats(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	roomStates, err := s.loadRoomAccountDataStates(r.Context())
+	if err != nil {
+		return err
+	}
 
 	items := make([]compat.Chat, 0, chatPageSize+1)
 	for _, room := range rooms {
@@ -226,7 +243,7 @@ func (s *Server) listChats(w http.ResponseWriter, r *http.Request) error {
 				continue
 			}
 		}
-		chat, mapErr := s.mapRoomToChat(r.Context(), room, lookup, chatPreviewParticipants, true)
+		chat, mapErr := s.mapRoomToChat(r.Context(), room, lookup, chatPreviewParticipants, true, roomStates[room.ID])
 		if mapErr != nil {
 			continue
 		}
@@ -286,7 +303,11 @@ func (s *Server) getChat(w http.ResponseWriter, r *http.Request) error {
 	if room == nil {
 		return errs.NotFound("Chat not found")
 	}
-	chat, err := s.mapRoomToChat(r.Context(), room, lookup, maxParticipants, true)
+	roomStates, err := s.loadRoomAccountDataStates(r.Context())
+	if err != nil {
+		return err
+	}
+	chat, err := s.mapRoomToChat(r.Context(), room, lookup, maxParticipants, true, roomStates[room.ID])
 	if err != nil {
 		return err
 	}
@@ -313,6 +334,61 @@ func (s *Server) loadRoomsSorted(ctx context.Context) ([]*database.Room, error) 
 		return nil, errs.Internal(fmt.Errorf("room query failed: %w", err))
 	}
 	return rooms, nil
+}
+
+func (s *Server) loadRoomAccountDataStates(ctx context.Context) (map[id.RoomID]roomAccountDataState, error) {
+	cli := s.rt.Client()
+	if cli == nil || cli.Account == nil {
+		return map[id.RoomID]roomAccountDataState{}, nil
+	}
+	rows, err := cli.DB.Query(ctx, roomAccountDataSelectQuery, cli.Account.UserID)
+	if err != nil {
+		return nil, errs.Internal(fmt.Errorf("failed to query room account data: %w", err))
+	}
+	defer rows.Close()
+
+	states := make(map[id.RoomID]roomAccountDataState)
+	for rows.Next() {
+		var (
+			roomIDRaw string
+			eventType string
+			content   []byte
+		)
+		if scanErr := rows.Scan(&roomIDRaw, &eventType, &content); scanErr != nil {
+			return nil, errs.Internal(fmt.Errorf("failed to scan room account data: %w", scanErr))
+		}
+		if roomIDRaw == "" {
+			continue
+		}
+		roomID := id.RoomID(roomIDRaw)
+		state := states[roomID]
+		switch eventType {
+		case event.AccountDataRoomTags.Type:
+			var tags event.TagEventContent
+			if unmarshalErr := json.Unmarshal(content, &tags); unmarshalErr != nil {
+				break
+			}
+			_, state.IsPinned = tags.Tags[event.RoomTagFavourite]
+			_, state.IsLowPriority = tags.Tags[event.RoomTagLowPriority]
+		case event.AccountDataBeeperMute.Type:
+			var mute event.BeeperMuteEventContent
+			if unmarshalErr := json.Unmarshal(content, &mute); unmarshalErr != nil {
+				break
+			}
+			state.IsMuted = mute.IsMuted()
+		case "com.beeper.inbox.done":
+			var done beeperInboxDoneContent
+			if unmarshalErr := json.Unmarshal(content, &done); unmarshalErr != nil {
+				break
+			}
+			state.IsArchived = done.UpdatedTS != nil || done.AtOrder != nil
+		}
+		states[roomID] = state
+	}
+	if err = rows.Err(); err != nil {
+		return nil, errs.Internal(fmt.Errorf("room account data query failed: %w", err))
+	}
+	return states, nil
 }
 
 func roomIsOlderThanCursor(room *database.Room, c *cursor.ChatCursor) bool {
@@ -343,7 +419,7 @@ func roomIsNewerThanCursor(room *database.Room, c *cursor.ChatCursor) bool {
 	return string(room.ID) < c.RoomID
 }
 
-func (s *Server) mapRoomToChat(ctx context.Context, room *database.Room, lookup *accountLookup, maxParticipants int, includePreview bool) (compat.Chat, error) {
+func (s *Server) mapRoomToChat(ctx context.Context, room *database.Room, lookup *accountLookup, maxParticipants int, includePreview bool, roomState roomAccountDataState) (compat.Chat, error) {
 	accountID, network := inferAccountForRoom(room.ID, lookup)
 	participants, total := s.loadRoomParticipants(ctx, room)
 	filteredParticipants := participants
@@ -374,9 +450,9 @@ func (s *Server) mapRoomToChat(ctx context.Context, room *database.Room, lookup 
 			Total:   total,
 		},
 		UnreadCount: room.UnreadMessages,
-		IsArchived:  false,
-		IsMuted:     false,
-		IsPinned:    false,
+		IsArchived:  roomState.IsArchived,
+		IsMuted:     roomState.IsMuted,
+		IsPinned:    roomState.IsPinned,
 	}
 
 	if ts := room.SortingTimestamp.UnixMilli(); ts > 0 {

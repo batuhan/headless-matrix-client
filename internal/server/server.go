@@ -34,34 +34,30 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	s.handle(mux, "GET /v1/accounts", s.getAccounts, false)
-	s.handle(mux, "GET /v0/get-accounts", s.getAccounts, false)
 
 	s.handle(mux, "GET /v1/chats", s.listChats, false)
+	s.handle(mux, "POST /v1/chats", s.createChat, false)
 	s.handle(mux, "GET /v1/chats/{chatID}", s.getChat, false)
-	s.handle(mux, "GET /v0/get-chat", s.getChat, false)
+	s.handle(mux, "GET /v1/chats/search", s.searchChats, false)
+	s.handle(mux, "POST /v1/chats/{chatID}/archive", s.archiveChat, false)
+	s.handle(mux, "POST /v1/chats/{chatID}/reminders", s.setChatReminder, false)
+	s.handle(mux, "DELETE /v1/chats/{chatID}/reminders", s.clearChatReminder, false)
 
 	s.handle(mux, "GET /v1/chats/{chatID}/messages", s.listMessages, false)
 	s.handle(mux, "POST /v1/chats/{chatID}/messages", s.sendMessage, false)
-	s.handle(mux, "POST /v0/send-message", s.sendMessage, false)
 	s.handle(mux, "PUT /v1/chats/{chatID}/messages/{messageID}", s.editMessage, false)
 	s.handle(mux, "POST /v1/chats/{chatID}/messages/{messageID}/reactions", s.addReaction, false)
 	s.handle(mux, "DELETE /v1/chats/{chatID}/messages/{messageID}/reactions", s.removeReaction, false)
+	s.handle(mux, "GET /v1/messages/search", s.searchMessages, false)
 
 	s.handle(mux, "POST /v1/assets/download", s.downloadAsset, false)
-	s.handle(mux, "POST /v0/download-asset", s.downloadAsset, false)
 	s.handle(mux, "GET /v1/assets/serve", s.serveAsset, true)
 	s.handle(mux, "POST /v1/assets/upload", s.uploadAsset, false)
 	s.handle(mux, "POST /v1/assets/upload/base64", s.uploadAsset, false)
 
-	s.handleUnsupported(mux, "GET /v1/messages/search", "GET /v0/search-messages")
-	s.handleUnsupported(mux, "GET /v1/chats/search", "GET /v0/search-chats")
-	s.handleUnsupported(mux, "GET /v1/accounts/{accountID}/contacts", "GET /v0/search-users")
-	s.handleUnsupported(mux, "GET /v1/search", "GET /v0/search")
-	s.handleUnsupported(mux, "POST /v1/focus", "POST /v0/focus-app")
-	s.handleUnsupported(mux, "POST /v1/chats", "POST /v0/create-chat")
-	s.handleUnsupported(mux, "POST /v1/chats/{chatID}/archive", "POST /v0/archive-chat")
-	s.handleUnsupported(mux, "POST /v1/chats/{chatID}/reminders", "POST /v0/set-chat-reminder")
-	s.handleUnsupported(mux, "DELETE /v1/chats/{chatID}/reminders", "DELETE /v0/clear-chat-reminder")
+	s.handle(mux, "GET /v1/accounts/{accountID}/contacts", s.searchContacts, false)
+	s.handle(mux, "GET /v1/search", s.search, false)
+	s.handle(mux, "POST /v1/focus", s.focusApp, false)
 
 	return mux
 }
@@ -71,20 +67,32 @@ func (s *Server) handle(mux *http.ServeMux, pattern string, handler apiHandler, 
 	mux.Handle(pattern, s.auth.Wrap(wrapped, allowQueryToken))
 }
 
-func (s *Server) handleUnsupported(mux *http.ServeMux, patterns ...string) {
-	for _, pattern := range patterns {
-		s.handle(mux, pattern, func(w http.ResponseWriter, _ *http.Request) error {
-			return errs.NotImplemented("This endpoint is not implemented in gomuks-beeper-api")
-		}, false)
-	}
-}
-
 func (s *Server) wrap(handler apiHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := s.requireBeeperHomeserver(); err != nil {
+			errs.Write(w, err)
+			return
+		}
 		if err := handler(w, r); err != nil {
 			errs.Write(w, err)
 		}
 	})
+}
+
+func (s *Server) requireBeeperHomeserver() error {
+	cli := s.rt.Client()
+	if cli == nil || cli.Account == nil || cli.Client == nil || cli.Client.HomeserverURL == nil {
+		return errs.Forbidden("A logged-in Beeper Matrix session is required")
+	}
+	hostname := strings.ToLower(strings.TrimSpace(cli.Client.HomeserverURL.Hostname()))
+	switch {
+	case hostname == "matrix.beeper.com",
+		hostname == "matrix.beeper-staging.com",
+		hostname == "matrix.beeper-dev.com":
+		return nil
+	default:
+		return errs.Forbidden("Only Beeper homeserver sessions are supported")
+	}
 }
 
 func writeJSON(w http.ResponseWriter, value any) error {

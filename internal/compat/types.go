@@ -92,9 +92,19 @@ type ListChatsOutput struct {
 	NewestCursor *string `json:"newestCursor"`
 }
 
+type SearchChatsOutput = ListChatsOutput
+
 type ListMessagesOutput struct {
 	Items   []Message `json:"items"`
 	HasMore bool      `json:"hasMore"`
+}
+
+type SearchMessagesOutput struct {
+	Items        []Message       `json:"items"`
+	Chats        map[string]Chat `json:"chats"`
+	HasMore      bool            `json:"hasMore"`
+	OldestCursor *string         `json:"oldestCursor"`
+	NewestCursor *string         `json:"newestCursor"`
 }
 
 type SendMessageOutput struct {
@@ -184,4 +194,45 @@ type ArchiveChatInput struct {
 
 type SetChatReminderInput struct {
 	Reminder map[string]any `json:"reminder"`
+}
+
+type ActionSuccessOutput struct {
+	Success bool `json:"success"`
+}
+
+type SearchContactsOutput struct {
+	Items []User `json:"items"`
+}
+
+type FocusAppInput struct {
+	ChatID              string `json:"chatID,omitempty"`
+	MessageID           string `json:"messageID,omitempty"`
+	DraftText           string `json:"draftText,omitempty"`
+	DraftAttachmentPath string `json:"draftAttachmentPath,omitempty"`
+}
+
+type FocusAppOutput struct {
+	Success bool `json:"success"`
+}
+
+type CreateChatInput struct {
+	AccountID      string   `json:"accountID"`
+	Type           string   `json:"type"`
+	ParticipantIDs []string `json:"participantIDs"`
+	Title          string   `json:"title,omitempty"`
+	MessageText    string   `json:"messageText,omitempty"`
+}
+
+type CreateChatOutput struct {
+	ChatID string `json:"chatID"`
+}
+
+type UnifiedSearchResults struct {
+	Chats    []Chat               `json:"chats"`
+	InGroups []Chat               `json:"in_groups"`
+	Messages SearchMessagesOutput `json:"messages"`
+}
+
+type UnifiedSearchOutput struct {
+	Results UnifiedSearchResults `json:"results"`
 }
