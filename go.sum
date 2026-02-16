@@ -10,6 +10,8 @@ github.com/alecthomas/chroma/v2 v2.22.0 h1:PqEhf+ezz5F5owoDeOUKFzW+W3ZJDShNCaHg4
 github.com/alecthomas/chroma/v2 v2.22.0/go.mod h1:NqVhfBR0lte5Ouh3DcthuUCTUpDC9cxBOfyMbMQPs3o=
 github.com/alecthomas/repr v0.5.2 h1:SU73FTI9D1P5UNtvseffFSGmdNci/O6RsqzeXJtP0Qs=
 github.com/alecthomas/repr v0.5.2/go.mod h1:Fr0507jx4eOXV7AlPV6AVZLYrLIuIeSOWtW57eE/O/4=
+github.com/beeper/desktop-api-go v0.2.0 h1:VrwB1FCEiuPycGo6TsYSVVSKQIWFg22xmlRWVJ88E0A=
+github.com/beeper/desktop-api-go v0.2.0/go.mod h1:y9Mk83OdQWo6ldLTcPyaUPrwjkmvy/3QkhHqZLhU/mA=
 github.com/buckket/go-blurhash v1.1.0 h1:X5M6r0LIvwdvKiUtiNcRL2YlmOfMzYobI3VCKCZc9Do=
 github.com/buckket/go-blurhash v1.1.0/go.mod h1:aT2iqo5W9vu9GpyoLErKfTHwgODsZp3bQfXjXJUxNb8=
 github.com/coder/websocket v1.8.14 h1:9L0p0iKiNOibykf283eHkKUHHrpG7f65OE3BhhO7v9g=

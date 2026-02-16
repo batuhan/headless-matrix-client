@@ -4,6 +4,7 @@ go 1.24.0
 
 require (
 	github.com/beeper/desktop-api-go v0.2.0
+	github.com/coder/websocket v1.8.14
 	go.mau.fi/gomuks v0.2601.0
 	maunium.net/go/mautrix v0.26.3-0.20260128193407-2423716f8394
 )
@@ -13,7 +14,6 @@ require (
 	github.com/SherClockHolmes/webpush-go v1.4.0 // indirect
 	github.com/alecthomas/chroma/v2 v2.22.0 // indirect
 	github.com/buckket/go-blurhash v1.1.0 // indirect
-	github.com/coder/websocket v1.8.14 // indirect
 	github.com/coreos/go-systemd/v22 v22.6.0 // indirect
 	github.com/disintegration/imaging v1.6.2 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
@@ -48,4 +48,3 @@ require (
 )
 
 replace go.mau.fi/gomuks => ../gomuks-api
-replace github.com/beeper/desktop-api-go => ../desktop-api-go

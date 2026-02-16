@@ -46,16 +46,8 @@ type SearchMessagesOutput struct {
 	NewestCursor *string         `json:"newestCursor"`
 }
 
-type SendMessageOutput struct {
-	ChatID           string `json:"chatID"`
-	PendingMessageID string `json:"pendingMessageID"`
-}
-
-type EditMessageOutput struct {
-	ChatID    string `json:"chatID"`
-	MessageID string `json:"messageID"`
-	Success   bool   `json:"success"`
-}
+type SendMessageOutput = beeperdesktopapi.MessageSendResponse
+type EditMessageOutput = beeperdesktopapi.MessageUpdateResponse
 
 type AddReactionOutput struct {
 	Success       bool   `json:"success"`
@@ -72,14 +64,8 @@ type RemoveReactionOutput struct {
 	ReactionKey string `json:"reactionKey"`
 }
 
-type DownloadAssetInput struct {
-	URL string `json:"url"`
-}
-
-type DownloadAssetOutput struct {
-	SrcURL string `json:"srcURL,omitempty"`
-	Error  string `json:"error,omitempty"`
-}
+type DownloadAssetInput = beeperdesktopapi.AssetDownloadParams
+type DownloadAssetOutput = beeperdesktopapi.AssetDownloadResponse
 
 type UploadAssetInput struct {
 	Content  string `json:"content"`
@@ -135,13 +121,8 @@ type SetChatReminderInput struct {
 	Reminder map[string]any `json:"reminder"`
 }
 
-type ActionSuccessOutput struct {
-	Success bool `json:"success"`
-}
-
-type SearchContactsOutput struct {
-	Items []User `json:"items"`
-}
+type ActionSuccessOutput = beeperdesktopapi.ChatArchiveResponse
+type SearchContactsOutput = beeperdesktopapi.AccountContactSearchResponse
 
 type ListContactsOutput struct {
 	Items        []User  `json:"items"`
@@ -157,9 +138,7 @@ type FocusAppInput struct {
 	DraftAttachmentPath string `json:"draftAttachmentPath,omitempty"`
 }
 
-type FocusAppOutput struct {
-	Success bool `json:"success"`
-}
+type FocusAppOutput = beeperdesktopapi.FocusResponse
 
 type CreateChatStartUserInput struct {
 	ID            string `json:"id,omitempty"`
