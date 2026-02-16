@@ -7,8 +7,11 @@ HTTP API server that implements a Beeper Desktop API-compatible surface on top o
 - Starts gomuks from a dedicated state directory
 - Exposes Beeper-compatible routes with Bearer token auth
 - Maps gomuks rooms/events into Beeper chat/message/account schemas
+- Implements the current `v1` route surface used by Beeper Desktop API clients (accounts, chats, messages, assets, search, contacts)
 - Supports asset upload/download/serve endpoints
 - Uses Matrix room/account data (`m.tag`, `com.beeper.mute`, `com.beeper.inbox.done`, `com.beeper.chats.reminder`) to enrich chat state
+- Supports `POST /v1/chats` in both `mode: "create"` and `mode: "start"` formats
+- Supports both contacts APIs: `GET /v1/accounts/{accountID}/contacts` and `GET /v1/accounts/{accountID}/contacts/list`
 
 ## Run
 
