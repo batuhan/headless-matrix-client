@@ -56,6 +56,7 @@ func (s *Server) Handler() http.Handler {
 	s.handle(mux, "POST /v1/assets/upload/base64", s.uploadAsset, false)
 
 	s.handle(mux, "GET /v1/accounts/{accountID}/contacts", s.searchContacts, false)
+	s.handle(mux, "GET /v1/accounts/{accountID}/contacts/list", s.listContacts, false)
 	s.handle(mux, "GET /v1/search", s.search, false)
 	s.handle(mux, "POST /v1/focus", s.focusApp, false)
 

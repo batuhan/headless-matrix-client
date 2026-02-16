@@ -143,6 +143,13 @@ type SearchContactsOutput struct {
 	Items []User `json:"items"`
 }
 
+type ListContactsOutput struct {
+	Items        []User  `json:"items"`
+	HasMore      bool    `json:"hasMore"`
+	OldestCursor *string `json:"oldestCursor"`
+	NewestCursor *string `json:"newestCursor"`
+}
+
 type FocusAppInput struct {
 	ChatID              string `json:"chatID,omitempty"`
 	MessageID           string `json:"messageID,omitempty"`
@@ -154,16 +161,29 @@ type FocusAppOutput struct {
 	Success bool `json:"success"`
 }
 
+type CreateChatStartUserInput struct {
+	ID            string `json:"id,omitempty"`
+	Username      string `json:"username,omitempty"`
+	PhoneNumber   string `json:"phoneNumber,omitempty"`
+	Email         string `json:"email,omitempty"`
+	FullName      string `json:"fullName,omitempty"`
+	CannotMessage *bool  `json:"cannotMessage,omitempty"`
+}
+
 type CreateChatInput struct {
-	AccountID      string   `json:"accountID"`
-	Type           string   `json:"type"`
-	ParticipantIDs []string `json:"participantIDs"`
-	Title          string   `json:"title,omitempty"`
-	MessageText    string   `json:"messageText,omitempty"`
+	Mode           string                    `json:"mode,omitempty"`
+	AccountID      string                    `json:"accountID"`
+	Type           string                    `json:"type"`
+	ParticipantIDs []string                  `json:"participantIDs"`
+	Title          string                    `json:"title,omitempty"`
+	MessageText    string                    `json:"messageText,omitempty"`
+	User           *CreateChatStartUserInput `json:"user,omitempty"`
+	AllowInvite    *bool                     `json:"allowInvite,omitempty"`
 }
 
 type CreateChatOutput struct {
 	ChatID string `json:"chatID"`
+	Status string `json:"status,omitempty"`
 }
 
 type UnifiedSearchResults struct {

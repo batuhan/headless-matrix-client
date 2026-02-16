@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -22,7 +23,9 @@ const (
 	searchChatsDefaultLimit    = 50
 	searchChatsMaxLimit        = 200
 	searchMessagesDefaultLimit = 20
-	searchMessagesMaxLimit     = 200
+	searchMessagesMaxLimit     = 20
+	searchContactsDefaultLimit = 50
+	searchContactsMaxLimit     = 200
 	unifiedChatSectionLimit    = 30
 	unifiedMessageSectionLimit = 20
 )
@@ -75,6 +78,10 @@ type reminderInput struct {
 		RemindAtMS               int64 `json:"remindAtMs"`
 		DismissOnIncomingMessage *bool `json:"dismissOnIncomingMessage,omitempty"`
 	} `json:"reminder"`
+}
+
+type contactCursor struct {
+	Index int `json:"index"`
 }
 
 func (s *Server) searchChats(w http.ResponseWriter, r *http.Request) error {
@@ -144,6 +151,93 @@ func (s *Server) searchContacts(w http.ResponseWriter, r *http.Request) error {
 		})
 	}
 	return writeJSON(w, compat.SearchContactsOutput{Items: items})
+}
+
+func (s *Server) listContacts(w http.ResponseWriter, r *http.Request) error {
+	accountID := strings.TrimSpace(r.PathValue("accountID"))
+	if accountID == "" {
+		return errs.Validation(map[string]any{"accountID": "accountID is required"})
+	}
+	lookup, err := s.buildAccountLookup(r.Context())
+	if err != nil {
+		return err
+	}
+	if _, ok := lookup.ByID[accountID]; !ok {
+		return errs.NotFound("Account not found")
+	}
+
+	direction, err := parseDirection(r.URL.Query().Get("direction"))
+	if err != nil {
+		return err
+	}
+	limit, err := parseOptionalLimit(r.URL.Query().Get("limit"), searchContactsDefaultLimit, 1, searchContactsMaxLimit, "limit")
+	if err != nil {
+		return err
+	}
+	cursorValue, err := parseContactCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		return err
+	}
+
+	contacts, err := s.loadAccountContacts(r.Context(), lookup, accountID, strings.TrimSpace(r.URL.Query().Get("query")))
+	if err != nil {
+		return err
+	}
+
+	start := 0
+	hasMore := false
+	switch direction {
+	case "after":
+		if cursorValue != nil {
+			end := cursorValue.Index
+			if end < 0 {
+				end = 0
+			}
+			if end > len(contacts) {
+				end = len(contacts)
+			}
+			start = end - limit
+			if start < 0 {
+				start = 0
+			}
+			contacts = contacts[start:end]
+			hasMore = start > 0
+		} else if len(contacts) > limit {
+			contacts = contacts[:limit]
+			hasMore = true
+		}
+	default:
+		if cursorValue != nil {
+			start = cursorValue.Index + 1
+		}
+		if start > len(contacts) {
+			start = len(contacts)
+		}
+		end := start + limit
+		if end > len(contacts) {
+			end = len(contacts)
+		}
+		hasMore = end < len(contacts)
+		contacts = contacts[start:end]
+	}
+
+	var newestCursor *string
+	var oldestCursor *string
+	if len(contacts) > 0 {
+		newestEncoded, newErr := cursor.Encode(contactCursor{Index: start})
+		oldestEncoded, oldErr := cursor.Encode(contactCursor{Index: start + len(contacts) - 1})
+		if firstErr(newErr, oldErr) == nil {
+			newestCursor = &newestEncoded
+			oldestCursor = &oldestEncoded
+		}
+	}
+
+	return writeJSON(w, compat.ListContactsOutput{
+		Items:        contacts,
+		HasMore:      hasMore,
+		OldestCursor: oldestCursor,
+		NewestCursor: newestCursor,
+	})
 }
 
 func (s *Server) search(w http.ResponseWriter, r *http.Request) error {
@@ -217,18 +311,15 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request) error {
 		return err
 	}
 	req.AccountID = strings.TrimSpace(req.AccountID)
-	req.Type = strings.TrimSpace(req.Type)
+	req.Mode = strings.TrimSpace(req.Mode)
+	if req.Mode == "" {
+		req.Mode = "create"
+	}
 	if req.AccountID == "" {
 		return errs.Validation(map[string]any{"accountID": "accountID is required"})
 	}
-	if req.Type != "single" && req.Type != "group" {
-		return errs.Validation(map[string]any{"type": "must be one of: single, group"})
-	}
-	if len(req.ParticipantIDs) == 0 {
-		return errs.Validation(map[string]any{"participantIDs": "at least one participantID is required"})
-	}
-	if req.Type == "single" && len(req.ParticipantIDs) != 1 {
-		return errs.Validation(map[string]any{"participantIDs": "single chats require exactly one participantID"})
+	if req.Mode != "create" && req.Mode != "start" {
+		return errs.Validation(map[string]any{"mode": "must be one of: create, start"})
 	}
 
 	lookup, err := s.buildAccountLookup(r.Context())
@@ -239,8 +330,58 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request) error {
 		return errs.NotFound("Account not found")
 	}
 
-	invitees := make([]id.UserID, 0, len(req.ParticipantIDs))
-	for _, participantID := range req.ParticipantIDs {
+	if req.Mode == "start" {
+		return s.startChat(w, r, req, lookup)
+	}
+
+	req.Type = strings.TrimSpace(req.Type)
+	if req.Type != "single" && req.Type != "group" {
+		return errs.Validation(map[string]any{"type": "must be one of: single, group"})
+	}
+	if len(req.ParticipantIDs) == 0 {
+		return errs.Validation(map[string]any{"participantIDs": "at least one participantID is required"})
+	}
+	if req.Type == "single" && len(req.ParticipantIDs) != 1 {
+		return errs.Validation(map[string]any{"participantIDs": "single chats require exactly one participantID"})
+	}
+
+	chatID, err := s.createChatRoom(r.Context(), req.Type, req.ParticipantIDs, req.Title, req.MessageText)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, compat.CreateChatOutput{ChatID: chatID})
+}
+
+func (s *Server) startChat(w http.ResponseWriter, r *http.Request, req compat.CreateChatInput, lookup *accountLookup) error {
+	if req.User == nil {
+		return errs.Validation(map[string]any{"user": "user is required for mode=start"})
+	}
+	if req.User.CannotMessage != nil && *req.User.CannotMessage {
+		return errs.Forbidden("Cannot message this user on the selected account")
+	}
+
+	userID, err := s.resolveStartChatUserID(r.Context(), req.User)
+	if err != nil {
+		return err
+	}
+	existingChatID, err := s.findExistingSingleChat(r.Context(), lookup, req.AccountID, userID)
+	if err != nil {
+		return err
+	}
+	if existingChatID != "" {
+		return writeJSON(w, compat.CreateChatOutput{ChatID: existingChatID, Status: "existing"})
+	}
+
+	chatID, err := s.createChatRoom(r.Context(), "single", []string{userID}, "", req.MessageText)
+	if err != nil {
+		return err
+	}
+	return writeJSON(w, compat.CreateChatOutput{ChatID: chatID, Status: "created"})
+}
+
+func (s *Server) createChatRoom(ctx context.Context, chatType string, participantIDs []string, title string, messageText string) (string, error) {
+	invitees := make([]id.UserID, 0, len(participantIDs))
+	for _, participantID := range participantIDs {
 		participantID = strings.TrimSpace(participantID)
 		if participantID == "" {
 			continue
@@ -248,39 +389,131 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request) error {
 		invitees = append(invitees, id.UserID(participantID))
 	}
 	if len(invitees) == 0 {
-		return errs.Validation(map[string]any{"participantIDs": "at least one non-empty participantID is required"})
+		return "", errs.Validation(map[string]any{"participantIDs": "at least one non-empty participantID is required"})
 	}
-
 	createReq := &mautrix.ReqCreateRoom{
 		Visibility: "private",
 		Invite:     invitees,
-		IsDirect:   req.Type == "single",
+		IsDirect:   chatType == "single",
 	}
-	if req.Type == "group" {
-		createReq.Name = strings.TrimSpace(req.Title)
+	if chatType == "group" {
+		createReq.Name = strings.TrimSpace(title)
 	}
 
-	createResp, err := s.rt.Client().Client.CreateRoom(r.Context(), createReq)
+	createResp, err := s.rt.Client().Client.CreateRoom(ctx, createReq)
 	if err != nil {
-		return errs.Internal(fmt.Errorf("failed to create chat: %w", err))
+		return "", errs.Internal(fmt.Errorf("failed to create chat: %w", err))
 	}
 
-	if strings.TrimSpace(req.MessageText) != "" {
+	if strings.TrimSpace(messageText) != "" {
 		if _, err = s.rt.Client().SendMessage(
-			r.Context(),
+			ctx,
 			createResp.RoomID,
 			nil,
 			nil,
-			req.MessageText,
+			messageText,
 			nil,
 			nil,
 			nil,
 		); err != nil {
-			return errs.Internal(fmt.Errorf("chat was created but sending first message failed: %w", err))
+			return "", errs.Internal(fmt.Errorf("chat was created but sending first message failed: %w", err))
 		}
 	}
+	return createResp.RoomID.String(), nil
+}
 
-	return writeJSON(w, compat.CreateChatOutput{ChatID: createResp.RoomID.String()})
+func (s *Server) resolveStartChatUserID(ctx context.Context, user *compat.CreateChatStartUserInput) (string, error) {
+	if user == nil {
+		return "", errs.Validation(map[string]any{"user": "user is required"})
+	}
+	if directID := strings.TrimSpace(user.ID); directID != "" {
+		return directID, nil
+	}
+
+	queries := make([]string, 0, 4)
+	for _, candidate := range []string{user.Username, user.PhoneNumber, user.Email, user.FullName} {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range queries {
+			if strings.EqualFold(existing, candidate) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			queries = append(queries, candidate)
+		}
+	}
+	if len(queries) == 0 {
+		return "", errs.Validation(map[string]any{"user": "one of user.id, user.username, user.phoneNumber, user.email, or user.fullName is required"})
+	}
+
+	targetUsername := strings.TrimSpace(user.Username)
+	targetFullName := strings.TrimSpace(user.FullName)
+	var fallbackUserID string
+	for _, query := range queries {
+		resp, err := s.rt.Client().Client.SearchUserDirectory(ctx, query, 20)
+		if err != nil {
+			continue
+		}
+		for _, match := range resp.Results {
+			if match == nil || match.UserID == s.rt.Client().Account.UserID {
+				continue
+			}
+			foundUserID := strings.TrimSpace(match.UserID.String())
+			if foundUserID == "" {
+				continue
+			}
+			if targetUsername != "" && strings.EqualFold(userIDLocalpart(foundUserID), targetUsername) {
+				return foundUserID, nil
+			}
+			if targetFullName != "" && strings.EqualFold(strings.TrimSpace(match.DisplayName), targetFullName) {
+				return foundUserID, nil
+			}
+			if fallbackUserID == "" {
+				fallbackUserID = foundUserID
+			}
+		}
+	}
+	if fallbackUserID != "" {
+		return fallbackUserID, nil
+	}
+	return "", errs.NotFound("User not found")
+}
+
+func (s *Server) findExistingSingleChat(ctx context.Context, lookup *accountLookup, accountID, userID string) (string, error) {
+	rooms, err := s.loadRoomsSorted(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, room := range rooms {
+		mappedAccountID, _ := inferAccountForRoom(room.ID, lookup)
+		if mappedAccountID != accountID {
+			continue
+		}
+		if room.DMUserID == nil || *room.DMUserID == "" {
+			continue
+		}
+		if userIDMatches(string(*room.DMUserID), userID) {
+			return string(room.ID), nil
+		}
+	}
+	return "", nil
+}
+
+func userIDMatches(left, right string) bool {
+	left = strings.TrimSpace(left)
+	right = strings.TrimSpace(right)
+	if left == "" || right == "" {
+		return false
+	}
+	if strings.EqualFold(left, right) {
+		return true
+	}
+	return strings.EqualFold(userIDLocalpart(left), userIDLocalpart(right))
 }
 
 func (s *Server) archiveChat(w http.ResponseWriter, r *http.Request) error {
@@ -349,6 +582,157 @@ func (s *Server) clearChatReminder(w http.ResponseWriter, r *http.Request) error
 		return errs.Internal(fmt.Errorf("failed to clear chat reminder: %w", err))
 	}
 	return writeJSON(w, compat.ActionSuccessOutput{Success: true})
+}
+
+func parseContactCursor(raw string) (*contactCursor, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	if parsed, err := strconv.Atoi(raw); err == nil {
+		if parsed < 0 {
+			return nil, errs.Validation(map[string]any{"cursor": "must be a non-negative integer"})
+		}
+		return &contactCursor{Index: parsed}, nil
+	}
+	var decoded contactCursor
+	if err := cursor.Decode(raw, &decoded); err != nil {
+		return nil, errs.Validation(map[string]any{"cursor": err.Error()})
+	}
+	if decoded.Index < 0 {
+		return nil, errs.Validation(map[string]any{"cursor": "index must be a non-negative integer"})
+	}
+	return &decoded, nil
+}
+
+func (s *Server) loadAccountContacts(ctx context.Context, lookup *accountLookup, accountID, query string) ([]compat.User, error) {
+	rooms, err := s.loadRoomsSorted(ctx)
+	if err != nil {
+		return nil, err
+	}
+	contactsByID := make(map[string]compat.User)
+	for _, room := range rooms {
+		mappedAccountID, _ := inferAccountForRoom(room.ID, lookup)
+		if mappedAccountID != accountID {
+			continue
+		}
+		participants, _ := s.loadRoomParticipants(ctx, room)
+		for _, participant := range participants {
+			participant.ID = strings.TrimSpace(participant.ID)
+			if participant.ID == "" || participant.IsSelf {
+				continue
+			}
+			if participant.Username == "" {
+				participant.Username = userIDLocalpart(participant.ID)
+			}
+			if !contactMatchesQuery(participant, query) {
+				continue
+			}
+			existing, ok := contactsByID[participant.ID]
+			if ok {
+				contactsByID[participant.ID] = mergeContactUsers(existing, participant)
+			} else {
+				contactsByID[participant.ID] = participant
+			}
+		}
+	}
+
+	if query != "" {
+		resp, searchErr := s.rt.Client().Client.SearchUserDirectory(ctx, query, searchContactsMaxLimit)
+		if searchErr == nil {
+			for _, user := range resp.Results {
+				if user == nil {
+					continue
+				}
+				mapped := compat.User{
+					ID:            strings.TrimSpace(user.UserID.String()),
+					Username:      userIDLocalpart(user.UserID.String()),
+					FullName:      strings.TrimSpace(user.DisplayName),
+					ImgURL:        user.AvatarURL.String(),
+					CannotMessage: false,
+					IsSelf:        user.UserID == s.rt.Client().Account.UserID,
+				}
+				if mapped.ID == "" || mapped.IsSelf {
+					continue
+				}
+				if mapped.FullName == "" {
+					mapped.FullName = mapped.ID
+				}
+				existing, ok := contactsByID[mapped.ID]
+				if ok {
+					contactsByID[mapped.ID] = mergeContactUsers(existing, mapped)
+				} else {
+					contactsByID[mapped.ID] = mapped
+				}
+			}
+		}
+	}
+
+	contacts := make([]compat.User, 0, len(contactsByID))
+	for _, contact := range contactsByID {
+		if contact.FullName == "" {
+			contact.FullName = contact.ID
+		}
+		contacts = append(contacts, contact)
+	}
+	sort.Slice(contacts, func(i, j int) bool {
+		leftName := strings.ToLower(strings.TrimSpace(contacts[i].FullName))
+		rightName := strings.ToLower(strings.TrimSpace(contacts[j].FullName))
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		if contacts[i].Username != contacts[j].Username {
+			return contacts[i].Username < contacts[j].Username
+		}
+		return contacts[i].ID < contacts[j].ID
+	})
+	return contacts, nil
+}
+
+func mergeContactUsers(existing, incoming compat.User) compat.User {
+	if existing.Username == "" {
+		existing.Username = incoming.Username
+	}
+	if existing.PhoneNumber == "" {
+		existing.PhoneNumber = incoming.PhoneNumber
+	}
+	if existing.Email == "" {
+		existing.Email = incoming.Email
+	}
+	if existing.FullName == "" || existing.FullName == existing.ID {
+		existing.FullName = incoming.FullName
+	}
+	if existing.ImgURL == "" {
+		existing.ImgURL = incoming.ImgURL
+	}
+	existing.IsSelf = existing.IsSelf || incoming.IsSelf
+	existing.CannotMessage = existing.CannotMessage || incoming.CannotMessage
+	return existing
+}
+
+func userIDLocalpart(userID string) string {
+	left := strings.SplitN(strings.TrimSpace(userID), ":", 2)[0]
+	return strings.TrimPrefix(left, "@")
+}
+
+func contactMatchesQuery(user compat.User, query string) bool {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return true
+	}
+	haystack := strings.ToLower(strings.Join([]string{
+		user.ID,
+		user.Username,
+		user.PhoneNumber,
+		user.Email,
+		user.FullName,
+	}, " "))
+	for _, token := range strings.Fields(strings.ToLower(query)) {
+		if !strings.Contains(haystack, token) {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) searchChatsCore(ctx context.Context, params searchChatsParams) (compat.SearchChatsOutput, error) {
