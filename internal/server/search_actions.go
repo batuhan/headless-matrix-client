@@ -293,13 +293,14 @@ func (s *Server) focusApp(w http.ResponseWriter, r *http.Request) error {
 	if err := decodeJSONIfPresent(r, &req); err != nil {
 		return errs.Validation(map[string]any{"error": err.Error()})
 	}
-	if req.ChatID != "" {
-		req.ChatID = readChatID(r, req.ChatID)
+	chatID := ""
+	if req.ChatID.Valid() {
+		chatID = readChatID(r, req.ChatID.Value)
 	}
-	if strings.TrimSpace(req.ChatID) == "" {
-		req.ChatID = readChatID(r, "")
+	if strings.TrimSpace(chatID) == "" {
+		chatID = readChatID(r, "")
 	}
-	if strings.TrimSpace(req.ChatID) == "" && strings.TrimSpace(req.DraftText) != "" {
+	if strings.TrimSpace(chatID) == "" && strings.TrimSpace(req.DraftText.Or("")) != "" {
 		return errs.Validation(map[string]any{"draftText": "chatID is required when draftText is set"})
 	}
 	return writeJSON(w, compat.FocusAppOutput{Success: true})
@@ -334,29 +335,29 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request) error {
 		return s.startChat(w, r, req, lookup)
 	}
 
-	req.Type = strings.TrimSpace(req.Type)
-	if req.Type != "single" && req.Type != "group" {
+	chatType := strings.TrimSpace(string(req.Type))
+	if chatType != "single" && chatType != "group" {
 		return errs.Validation(map[string]any{"type": "must be one of: single, group"})
 	}
 	if len(req.ParticipantIDs) == 0 {
 		return errs.Validation(map[string]any{"participantIDs": "at least one participantID is required"})
 	}
-	if req.Type == "single" && len(req.ParticipantIDs) != 1 {
+	if chatType == "single" && len(req.ParticipantIDs) != 1 {
 		return errs.Validation(map[string]any{"participantIDs": "single chats require exactly one participantID"})
 	}
 
-	chatID, err := s.createChatRoom(r.Context(), req.Type, req.ParticipantIDs, req.Title, req.MessageText)
+	chatID, err := s.createChatRoom(r.Context(), chatType, req.ParticipantIDs, req.Title.Or(""), req.MessageText.Or(""))
 	if err != nil {
 		return err
 	}
-	return writeJSON(w, compat.CreateChatOutput{ChatID: chatID})
+	return writeJSON(w, newCreateChatOutput(chatID, ""))
 }
 
 func (s *Server) startChat(w http.ResponseWriter, r *http.Request, req compat.CreateChatInput, lookup *accountLookup) error {
 	if req.User == nil {
 		return errs.Validation(map[string]any{"user": "user is required for mode=start"})
 	}
-	if req.User.CannotMessage != nil && *req.User.CannotMessage {
+	if req.User.CannotMessage {
 		return errs.Forbidden("Cannot message this user on the selected account")
 	}
 
@@ -369,14 +370,21 @@ func (s *Server) startChat(w http.ResponseWriter, r *http.Request, req compat.Cr
 		return err
 	}
 	if existingChatID != "" {
-		return writeJSON(w, compat.CreateChatOutput{ChatID: existingChatID, Status: "existing"})
+		return writeJSON(w, newCreateChatOutput(existingChatID, "existing"))
 	}
 
-	chatID, err := s.createChatRoom(r.Context(), "single", []string{userID}, "", req.MessageText)
+	chatID, err := s.createChatRoom(r.Context(), "single", []string{userID}, "", req.MessageText.Or(""))
 	if err != nil {
 		return err
 	}
-	return writeJSON(w, compat.CreateChatOutput{ChatID: chatID, Status: "created"})
+	return writeJSON(w, newCreateChatOutput(chatID, "created"))
+}
+
+func newCreateChatOutput(chatID, status string) compat.CreateChatOutput {
+	output := compat.CreateChatOutput{}
+	output.ChatID = chatID
+	output.Status = status
+	return output
 }
 
 func (s *Server) createChatRoom(ctx context.Context, chatType string, participantIDs []string, title string, messageText string) (string, error) {

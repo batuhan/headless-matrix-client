@@ -139,9 +139,9 @@ func (s *Server) uploadAsset(w http.ResponseWriter, r *http.Request) error {
 		SrcURL:   fileURLFromPath(filePath),
 		FileName: fileName,
 		MimeType: mimeType,
-		FileSize: int64(len(data)),
-		Width:    meta.Width,
-		Height:   meta.Height,
+		FileSize: float64(len(data)),
+		Width:    float64(meta.Width),
+		Height:   float64(meta.Height),
 		Duration: meta.Duration,
 	})
 }
@@ -190,7 +190,7 @@ func (s *Server) parseBase64Upload(r *http.Request) ([]byte, string, string, err
 	if err != nil {
 		return nil, "", "", fmt.Errorf("invalid base64 content")
 	}
-	return decoded, input.FileName, input.MimeType, nil
+	return decoded, strings.TrimSpace(input.FileName.Or("")), strings.TrimSpace(input.MimeType.Or("")), nil
 }
 
 func (s *Server) resolveServePath(ctx context.Context, raw string) (string, error) {

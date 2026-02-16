@@ -108,7 +108,9 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) error {
 	if chatID == "" {
 		return errs.Validation(map[string]any{"chatID": "chatID is required"})
 	}
-	if strings.TrimSpace(req.Text) == "" && req.Attachment == nil {
+	text := strings.TrimSpace(req.Text.Or(""))
+	hasAttachment := strings.TrimSpace(req.Attachment.UploadID) != ""
+	if text == "" && !hasAttachment {
 		return errs.Validation(map[string]any{"text": "text or attachment is required"})
 	}
 
@@ -122,19 +124,20 @@ func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) error {
 
 	var base *event.MessageEventContent
 	var err error
-	if req.Attachment != nil {
-		base, err = s.buildAttachmentMessageContent(r.Context(), req.Attachment)
+	if hasAttachment {
+		base, err = s.buildAttachmentMessageContent(r.Context(), &req.Attachment)
 		if err != nil {
 			return err
 		}
 	}
 
 	var relatesTo *event.RelatesTo
-	if req.ReplyToMessageID != "" {
-		relatesTo = &event.RelatesTo{InReplyTo: &event.InReplyTo{EventID: id.EventID(req.ReplyToMessageID)}}
+	replyToMessageID := strings.TrimSpace(req.ReplyToMessageID.Or(""))
+	if replyToMessageID != "" {
+		relatesTo = &event.RelatesTo{InReplyTo: &event.InReplyTo{EventID: id.EventID(replyToMessageID)}}
 	}
 
-	dbEvent, err := cli.SendMessage(r.Context(), roomID, base, nil, req.Text, relatesTo, nil, nil)
+	dbEvent, err := cli.SendMessage(r.Context(), roomID, base, nil, text, relatesTo, nil, nil)
 	if err != nil {
 		return errs.Internal(fmt.Errorf("failed to send message: %w", err))
 	}
@@ -574,11 +577,11 @@ func (s *Server) buildAttachmentMessageContent(ctx context.Context, attachment *
 	if err != nil {
 		return nil, err
 	}
-	fileName := attachment.FileName
+	fileName := strings.TrimSpace(attachment.FileName.Or(""))
 	if fileName == "" {
 		fileName = meta.FileName
 	}
-	mimeType := attachment.MimeType
+	mimeType := strings.TrimSpace(attachment.MimeType.Or(""))
 	if mimeType == "" {
 		mimeType = meta.MimeType
 	}
@@ -602,7 +605,7 @@ func (s *Server) buildAttachmentMessageContent(ctx context.Context, attachment *
 		return nil, errs.Internal(fmt.Errorf("failed to upload media to Matrix: %w", err))
 	}
 
-	msgType := messageTypeFromAttachment(mimeType, attachment.Type)
+	msgType := messageTypeFromAttachment(mimeType, strings.TrimSpace(attachment.Type))
 	content := &event.MessageEventContent{
 		MsgType:  msgType,
 		Body:     fileName,
@@ -613,11 +616,11 @@ func (s *Server) buildAttachmentMessageContent(ctx context.Context, attachment *
 			Size:     int(stat.Size()),
 		},
 	}
-	if attachment.Size != nil {
+	if attachment.Size.Width > 0 || attachment.Size.Height > 0 {
 		content.Info.Width = int(attachment.Size.Width)
 		content.Info.Height = int(attachment.Size.Height)
 	}
-	duration := attachment.Duration
+	duration := attachment.Duration.Or(0)
 	if duration <= 0 {
 		duration = meta.Duration
 	}

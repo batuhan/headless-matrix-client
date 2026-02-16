@@ -67,42 +67,12 @@ type RemoveReactionOutput struct {
 type DownloadAssetInput = beeperdesktopapi.AssetDownloadParams
 type DownloadAssetOutput = beeperdesktopapi.AssetDownloadResponse
 
-type UploadAssetInput struct {
-	Content  string `json:"content"`
-	FileName string `json:"fileName,omitempty"`
-	MimeType string `json:"mimeType,omitempty"`
-}
+type UploadAssetInput = beeperdesktopapi.AssetUploadBase64Params
+type UploadAssetOutput = beeperdesktopapi.AssetUploadBase64Response
 
-type UploadAssetOutput struct {
-	UploadID string  `json:"uploadID,omitempty"`
-	SrcURL   string  `json:"srcURL,omitempty"`
-	FileName string  `json:"fileName,omitempty"`
-	MimeType string  `json:"mimeType,omitempty"`
-	FileSize int64   `json:"fileSize,omitempty"`
-	Width    int     `json:"width,omitempty"`
-	Height   int     `json:"height,omitempty"`
-	Duration float64 `json:"duration,omitempty"`
-	Error    string  `json:"error,omitempty"`
-}
-
-type SendMessageInput struct {
-	Text             string                  `json:"text,omitempty"`
-	ReplyToMessageID string                  `json:"replyToMessageID,omitempty"`
-	Attachment       *MessageAttachmentInput `json:"attachment,omitempty"`
-}
-
-type MessageAttachmentInput struct {
-	UploadID string          `json:"uploadID"`
-	MimeType string          `json:"mimeType,omitempty"`
-	FileName string          `json:"fileName,omitempty"`
-	Size     *AttachmentSize `json:"size,omitempty"`
-	Duration float64         `json:"duration,omitempty"`
-	Type     string          `json:"type,omitempty"`
-}
-
-type EditMessageInput struct {
-	Text string `json:"text"`
-}
+type SendMessageInput = beeperdesktopapi.MessageSendParams
+type MessageAttachmentInput = beeperdesktopapi.MessageSendParamsAttachment
+type EditMessageInput = beeperdesktopapi.MessageUpdateParams
 
 type AddReactionInput struct {
 	ReactionKey   string `json:"reactionKey"`
@@ -113,13 +83,8 @@ type RemoveReactionInput struct {
 	ReactionKey string `json:"reactionKey"`
 }
 
-type ArchiveChatInput struct {
-	Archived bool `json:"archived"`
-}
-
-type SetChatReminderInput struct {
-	Reminder map[string]any `json:"reminder"`
-}
+type ArchiveChatInput = beeperdesktopapi.ChatArchiveParams
+type SetChatReminderInput = beeperdesktopapi.ChatReminderNewParams
 
 type ActionSuccessOutput = beeperdesktopapi.ChatArchiveResponse
 type SearchContactsOutput = beeperdesktopapi.AccountContactSearchResponse
@@ -131,37 +96,20 @@ type ListContactsOutput struct {
 	NewestCursor *string `json:"newestCursor"`
 }
 
-type FocusAppInput struct {
-	ChatID              string `json:"chatID,omitempty"`
-	MessageID           string `json:"messageID,omitempty"`
-	DraftText           string `json:"draftText,omitempty"`
-	DraftAttachmentPath string `json:"draftAttachmentPath,omitempty"`
-}
-
+type FocusAppInput = beeperdesktopapi.FocusParams
 type FocusAppOutput = beeperdesktopapi.FocusResponse
 
-type CreateChatStartUserInput struct {
-	ID            string `json:"id,omitempty"`
-	Username      string `json:"username,omitempty"`
-	PhoneNumber   string `json:"phoneNumber,omitempty"`
-	Email         string `json:"email,omitempty"`
-	FullName      string `json:"fullName,omitempty"`
-	CannotMessage *bool  `json:"cannotMessage,omitempty"`
-}
+type CreateChatStartUserInput = shared.User
 
 type CreateChatInput struct {
-	Mode           string                    `json:"mode,omitempty"`
-	AccountID      string                    `json:"accountID"`
-	Type           string                    `json:"type"`
-	ParticipantIDs []string                  `json:"participantIDs"`
-	Title          string                    `json:"title,omitempty"`
-	MessageText    string                    `json:"messageText,omitempty"`
-	User           *CreateChatStartUserInput `json:"user,omitempty"`
-	AllowInvite    *bool                     `json:"allowInvite,omitempty"`
+	beeperdesktopapi.ChatNewParams
+	Mode        string                    `json:"mode,omitempty"`
+	User        *CreateChatStartUserInput `json:"user,omitempty"`
+	AllowInvite *bool                     `json:"allowInvite,omitempty"`
 }
 
 type CreateChatOutput struct {
-	ChatID string `json:"chatID"`
+	beeperdesktopapi.ChatNewResponse
 	Status string `json:"status,omitempty"`
 }
 
