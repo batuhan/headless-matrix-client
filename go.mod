@@ -3,7 +3,7 @@ module github.com/batuhan/gomuks-beeper-api
 go 1.24.0
 
 require (
-	github.com/beeper/desktop-api-go v0.2.0
+	github.com/beeper/desktop-api-go v0.3.0
 	github.com/coder/websocket v1.8.14
 	go.mau.fi/gomuks v0.2601.0
 	maunium.net/go/mautrix v0.26.3-0.20260128193407-2423716f8394

@@ -86,7 +86,10 @@ type RemoveReactionInput struct {
 type ArchiveChatInput = beeperdesktopapi.ChatArchiveParams
 type SetChatReminderInput = beeperdesktopapi.ChatReminderNewParams
 
-type ActionSuccessOutput = beeperdesktopapi.ChatArchiveResponse
+type ActionSuccessOutput struct {
+	Success bool `json:"success"`
+}
+
 type SearchContactsOutput = beeperdesktopapi.AccountContactSearchResponse
 
 type ListContactsOutput struct {
@@ -102,16 +105,17 @@ type FocusAppOutput = beeperdesktopapi.FocusResponse
 type CreateChatStartUserInput = shared.User
 
 type CreateChatInput struct {
-	beeperdesktopapi.ChatNewParams
-	Mode        string                    `json:"mode,omitempty"`
-	User        *CreateChatStartUserInput `json:"user,omitempty"`
-	AllowInvite *bool                     `json:"allowInvite,omitempty"`
+	Mode           string                    `json:"mode,omitempty"`
+	AccountID      string                    `json:"accountID"`
+	Type           string                    `json:"type"`
+	ParticipantIDs []string                  `json:"participantIDs"`
+	Title          string                    `json:"title,omitempty"`
+	MessageText    string                    `json:"messageText,omitempty"`
+	User           *CreateChatStartUserInput `json:"user,omitempty"`
+	AllowInvite    *bool                     `json:"allowInvite,omitempty"`
 }
 
-type CreateChatOutput struct {
-	beeperdesktopapi.ChatNewResponse
-	Status string `json:"status,omitempty"`
-}
+type CreateChatOutput = beeperdesktopapi.ChatNewResponse
 
 type UnifiedSearchResults struct {
 	Chats    []Chat               `json:"chats"`

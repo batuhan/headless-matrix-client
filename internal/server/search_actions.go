@@ -17,6 +17,7 @@ import (
 	"github.com/batuhan/gomuks-beeper-api/internal/compat"
 	"github.com/batuhan/gomuks-beeper-api/internal/cursor"
 	errs "github.com/batuhan/gomuks-beeper-api/internal/errors"
+	beeperdesktopapi "github.com/beeper/desktop-api-go"
 )
 
 const (
@@ -346,7 +347,7 @@ func (s *Server) createChat(w http.ResponseWriter, r *http.Request) error {
 		return errs.Validation(map[string]any{"participantIDs": "single chats require exactly one participantID"})
 	}
 
-	chatID, err := s.createChatRoom(r.Context(), chatType, req.ParticipantIDs, req.Title.Or(""), req.MessageText.Or(""))
+	chatID, err := s.createChatRoom(r.Context(), chatType, req.ParticipantIDs, req.Title, req.MessageText)
 	if err != nil {
 		return err
 	}
@@ -373,7 +374,7 @@ func (s *Server) startChat(w http.ResponseWriter, r *http.Request, req compat.Cr
 		return writeJSON(w, newCreateChatOutput(existingChatID, "existing"))
 	}
 
-	chatID, err := s.createChatRoom(r.Context(), "single", []string{userID}, "", req.MessageText.Or(""))
+	chatID, err := s.createChatRoom(r.Context(), "single", []string{userID}, "", req.MessageText)
 	if err != nil {
 		return err
 	}
@@ -381,9 +382,13 @@ func (s *Server) startChat(w http.ResponseWriter, r *http.Request, req compat.Cr
 }
 
 func newCreateChatOutput(chatID, status string) compat.CreateChatOutput {
-	output := compat.CreateChatOutput{}
-	output.ChatID = chatID
-	output.Status = status
+	output := compat.CreateChatOutput{ChatID: chatID}
+	switch status {
+	case "existing":
+		output.Status = beeperdesktopapi.ChatNewResponseStatusExisting
+	case "created":
+		output.Status = beeperdesktopapi.ChatNewResponseStatusCreated
+	}
 	return output
 }
 
