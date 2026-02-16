@@ -12,6 +12,7 @@ HTTP API server that implements a Beeper Desktop API-compatible surface on top o
 - Uses Matrix room/account data (`m.tag`, `com.beeper.mute`, `com.beeper.inbox.done`, `com.beeper.chats.reminder`) to enrich chat state
 - Supports `POST /v1/chats` in both `mode: "create"` and `mode: "start"` formats
 - Supports both contacts APIs: `GET /v1/accounts/{accountID}/contacts` and `GET /v1/accounts/{accountID}/contacts/list`
+- Exposes a schema-compatible WebSocket control endpoint at `GET /v1/ws` (`ready`, `subscriptions.set`, `subscriptions.updated`, `error`)
 
 ## Run
 
