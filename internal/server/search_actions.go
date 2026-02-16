@@ -139,8 +139,8 @@ func (s *Server) searchContacts(w http.ResponseWriter, r *http.Request) error {
 			Username:      username,
 			FullName:      fullName,
 			ImgURL:        user.AvatarURL.String(),
-			CannotMessage: &cannotMessage,
-			IsSelf:        &isSelf,
+			CannotMessage: cannotMessage,
+			IsSelf:        isSelf,
 		})
 	}
 	return writeJSON(w, compat.SearchContactsOutput{Items: items})
@@ -403,7 +403,7 @@ func (s *Server) searchChatsCore(ctx context.Context, params searchChatsParams) 
 		if len(params.AccountIDs) > 0 && !equalsAny(chat.AccountID, params.AccountIDs) {
 			continue
 		}
-		if params.Type != "any" && params.Type != "" && chat.Type != params.Type {
+		if params.Type != "any" && params.Type != "" && string(chat.Type) != params.Type {
 			continue
 		}
 		if params.UnreadOnly && chat.UnreadCount <= 0 {
@@ -890,15 +890,15 @@ func matchesMedia(msg compat.Message, mediaTypes []string) bool {
 				return true
 			}
 		case "video":
-			if msg.Type == "VIDEO" {
+			if string(msg.Type) == "VIDEO" {
 				return true
 			}
 		case "image":
-			if msg.Type == "IMAGE" || msg.Type == "STICKER" {
+			if string(msg.Type) == "IMAGE" || string(msg.Type) == "STICKER" {
 				return true
 			}
 		case "file":
-			if msg.Type == "FILE" {
+			if string(msg.Type) == "FILE" {
 				return true
 			}
 		case "link":
@@ -910,18 +910,17 @@ func matchesMedia(msg compat.Message, mediaTypes []string) bool {
 	return false
 }
 
-func matchesMessageDate(timestamp string, dateAfter, dateBefore *time.Time) bool {
+func matchesMessageDate(timestamp time.Time, dateAfter, dateBefore *time.Time) bool {
 	if dateAfter == nil && dateBefore == nil {
 		return true
 	}
-	ts, err := time.Parse(time.RFC3339, timestamp)
-	if err != nil {
+	if timestamp.IsZero() {
 		return false
 	}
-	if dateAfter != nil && !ts.After(*dateAfter) {
+	if dateAfter != nil && !timestamp.After(*dateAfter) {
 		return false
 	}
-	if dateBefore != nil && !ts.Before(*dateBefore) {
+	if dateBefore != nil && !timestamp.Before(*dateBefore) {
 		return false
 	}
 	return true

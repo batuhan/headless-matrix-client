@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"go.mau.fi/gomuks/pkg/hicli/database"
@@ -432,7 +431,7 @@ func (s *Server) mapEventToMessage(ctx context.Context, evt *database.Event, roo
 		ChatID:    string(evt.RoomID),
 		AccountID: accountID,
 		SenderID:  string(evt.Sender),
-		Timestamp: evt.Timestamp.Time.UTC().Format(time.RFC3339),
+		Timestamp: evt.Timestamp.Time.UTC(),
 		SortKey:   messageSortKey(evt),
 		IsSender:  evt.Sender == s.rt.Client().Account.UserID,
 		Reactions: reactions.Reactions[evt.ID],
@@ -450,7 +449,7 @@ func (s *Server) mapEventToMessage(ctx context.Context, evt *database.Event, roo
 	case event.EventReaction.Type:
 		var reaction event.ReactionEventContent
 		if err := json.Unmarshal(evt.GetContent(), &reaction); err == nil {
-			message.Type = "REACTION"
+			message.Type = compat.MessageType("REACTION")
 			message.Text = reaction.RelatesTo.Key
 			if message.LinkedMessageID == "" {
 				message.LinkedMessageID = string(reaction.RelatesTo.EventID)
@@ -476,25 +475,25 @@ func (s *Server) mapEventToMessage(ctx context.Context, evt *database.Event, roo
 	}
 }
 
-func mapMessageType(evtType string, msgType event.MessageType) string {
+func mapMessageType(evtType string, msgType event.MessageType) compat.MessageType {
 	if evtType == event.EventSticker.Type {
-		return "STICKER"
+		return compat.MessageType("STICKER")
 	}
 	switch msgType {
 	case event.MsgNotice:
-		return "NOTICE"
+		return compat.MessageType("NOTICE")
 	case event.MsgImage:
-		return "IMAGE"
+		return compat.MessageType("IMAGE")
 	case event.MsgVideo:
-		return "VIDEO"
+		return compat.MessageType("VIDEO")
 	case event.MsgAudio:
-		return "AUDIO"
+		return compat.MessageType("AUDIO")
 	case event.MsgFile:
-		return "FILE"
+		return compat.MessageType("FILE")
 	case event.MsgLocation:
-		return "LOCATION"
+		return compat.MessageType("LOCATION")
 	default:
-		return "TEXT"
+		return compat.MessageType("TEXT")
 	}
 }
 
@@ -516,13 +515,13 @@ func messageAttachment(content event.MessageEventContent, evtType string) (compa
 		SrcURL:   uri,
 		FileName: content.GetFileName(),
 		MimeType: "",
-		Type:     "unknown",
+		Type:     compat.AttachmentType("unknown"),
 	}
 	if content.Info != nil {
 		att.MimeType = content.Info.MimeType
-		att.FileSize = int64(content.Info.Size)
+		att.FileSize = float64(content.Info.Size)
 		if content.Info.Width > 0 || content.Info.Height > 0 {
-			att.Size = &compat.AttachmentSize{Width: content.Info.Width, Height: content.Info.Height}
+			att.Size = compat.AttachmentSize{Width: float64(content.Info.Width), Height: float64(content.Info.Height)}
 		}
 		if content.Info.Duration > 0 {
 			att.Duration = float64(content.Info.Duration) / 1000.0
@@ -533,14 +532,14 @@ func messageAttachment(content event.MessageEventContent, evtType string) (compa
 	}
 	switch msgType {
 	case event.MsgImage:
-		att.Type = "img"
+		att.Type = compat.AttachmentType("img")
 		att.IsGif = strings.EqualFold(att.MimeType, "image/gif")
 	case event.MsgVideo:
-		att.Type = "video"
+		att.Type = compat.AttachmentType("video")
 	case event.MsgAudio:
-		att.Type = "audio"
+		att.Type = compat.AttachmentType("audio")
 	case "m.sticker":
-		att.Type = "img"
+		att.Type = compat.AttachmentType("img")
 		att.IsSticker = true
 	}
 	return att, true
@@ -615,8 +614,8 @@ func (s *Server) buildAttachmentMessageContent(ctx context.Context, attachment *
 		},
 	}
 	if attachment.Size != nil {
-		content.Info.Width = attachment.Size.Width
-		content.Info.Height = attachment.Size.Height
+		content.Info.Width = int(attachment.Size.Width)
+		content.Info.Height = int(attachment.Size.Height)
 	}
 	duration := attachment.Duration
 	if duration <= 0 {

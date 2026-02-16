@@ -1,88 +1,27 @@
 package compat
 
-type User struct {
-	ID            string `json:"id"`
-	Username      string `json:"username,omitempty"`
-	PhoneNumber   string `json:"phoneNumber,omitempty"`
-	Email         string `json:"email,omitempty"`
-	FullName      string `json:"fullName,omitempty"`
-	ImgURL        string `json:"imgURL,omitempty"`
-	CannotMessage *bool  `json:"cannotMessage,omitempty"`
-	IsSelf        *bool  `json:"isSelf,omitempty"`
-}
+import (
+	beeperdesktopapi "github.com/beeper/desktop-api-go"
+	"github.com/beeper/desktop-api-go/shared"
+)
 
-type Account struct {
-	AccountID string `json:"accountID"`
-	Network   string `json:"network"`
-	User      User   `json:"user"`
-}
-
-type Participants struct {
-	Items   []User `json:"items"`
-	HasMore bool   `json:"hasMore"`
-	Total   int    `json:"total"`
-}
-
-type Attachment struct {
-	ID          string          `json:"id,omitempty"`
-	Type        string          `json:"type"`
-	SrcURL      string          `json:"srcURL,omitempty"`
-	MimeType    string          `json:"mimeType,omitempty"`
-	FileName    string          `json:"fileName,omitempty"`
-	FileSize    int64           `json:"fileSize,omitempty"`
-	IsGif       bool            `json:"isGif,omitempty"`
-	IsSticker   bool            `json:"isSticker,omitempty"`
-	IsVoiceNote bool            `json:"isVoiceNote,omitempty"`
-	Duration    float64         `json:"duration,omitempty"`
-	PosterImg   string          `json:"posterImg,omitempty"`
-	Size        *AttachmentSize `json:"size,omitempty"`
-}
-
-type AttachmentSize struct {
-	Width  int `json:"width,omitempty"`
-	Height int `json:"height,omitempty"`
-}
-
-type Reaction struct {
-	ID            string `json:"id"`
-	ReactionKey   string `json:"reactionKey"`
-	ImgURL        string `json:"imgURL,omitempty"`
-	ParticipantID string `json:"participantID"`
-	Emoji         bool   `json:"emoji,omitempty"`
-}
-
-type Message struct {
-	ID              string       `json:"id"`
-	ChatID          string       `json:"chatID"`
-	AccountID       string       `json:"accountID"`
-	SenderID        string       `json:"senderID"`
-	SenderName      string       `json:"senderName,omitempty"`
-	Timestamp       string       `json:"timestamp"`
-	SortKey         string       `json:"sortKey"`
-	Type            string       `json:"type,omitempty"`
-	Text            string       `json:"text,omitempty"`
-	IsSender        bool         `json:"isSender,omitempty"`
-	Attachments     []Attachment `json:"attachments,omitempty"`
-	IsUnread        bool         `json:"isUnread,omitempty"`
-	LinkedMessageID string       `json:"linkedMessageID,omitempty"`
-	Reactions       []Reaction   `json:"reactions,omitempty"`
-}
+type User = shared.User
+type Account = beeperdesktopapi.Account
+type Participants = beeperdesktopapi.ChatParticipants
+type Attachment = shared.Attachment
+type AttachmentType = shared.AttachmentType
+type AttachmentSize = shared.AttachmentSize
+type Reaction = shared.Reaction
+type Message = shared.Message
+type MessageType = shared.MessageType
+type ChatType = beeperdesktopapi.ChatType
 
 type Chat struct {
-	ID                 string       `json:"id"`
-	LocalChatID        *string      `json:"localChatID,omitempty"`
-	AccountID          string       `json:"accountID"`
-	Network            string       `json:"network"`
-	Title              string       `json:"title"`
-	Type               string       `json:"type"`
-	Participants       Participants `json:"participants"`
-	LastActivity       string       `json:"lastActivity,omitempty"`
-	UnreadCount        int          `json:"unreadCount"`
-	LastReadMessageKey string       `json:"lastReadMessageSortKey,omitempty"`
-	IsArchived         bool         `json:"isArchived,omitempty"`
-	IsMuted            bool         `json:"isMuted,omitempty"`
-	IsPinned           bool         `json:"isPinned,omitempty"`
-	Preview            *Message     `json:"preview,omitempty"`
+	beeperdesktopapi.Chat
+	// Extension for current renderer expectations.
+	Network string `json:"network,omitempty"`
+	// List chats includes an optional preview object.
+	Preview *Message `json:"preview,omitempty"`
 }
 
 type ListChatsOutput struct {

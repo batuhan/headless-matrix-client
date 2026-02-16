@@ -159,8 +159,8 @@ func (s *Server) loadAccounts(ctx context.Context) ([]compat.Account, error) {
 					Email:         firstString(bridgeAccount.ProfileData, "email"),
 					FullName:      fullName,
 					ImgURL:        firstString(bridgeAccount.ProfileData, "avatar", "avatar_url"),
-					CannotMessage: &cannotMessage,
-					IsSelf:        &self,
+					CannotMessage: cannotMessage,
+					IsSelf:        self,
 				},
 			})
 		}
@@ -175,8 +175,8 @@ func (s *Server) loadAccounts(ctx context.Context) ([]compat.Account, error) {
 			User: compat.User{
 				ID:            string(cli.Account.UserID),
 				FullName:      string(cli.Account.UserID),
-				CannotMessage: &cannotMessage,
-				IsSelf:        &self,
+				CannotMessage: cannotMessage,
+				IsSelf:        self,
 			},
 		})
 	}
@@ -438,25 +438,23 @@ func (s *Server) mapRoomToChat(ctx context.Context, room *database.Room, lookup 
 		chatType = "single"
 	}
 
-	chat := compat.Chat{
-		ID:        string(room.ID),
-		AccountID: accountID,
-		Network:   network,
-		Title:     title,
-		Type:      chatType,
-		Participants: compat.Participants{
-			Items:   filteredParticipants,
-			HasMore: hasMoreParticipants,
-			Total:   total,
-		},
-		UnreadCount: room.UnreadMessages,
-		IsArchived:  roomState.IsArchived,
-		IsMuted:     roomState.IsMuted,
-		IsPinned:    roomState.IsPinned,
+	chat := compat.Chat{Network: network}
+	chat.ID = string(room.ID)
+	chat.AccountID = accountID
+	chat.Title = title
+	chat.Type = compat.ChatType(chatType)
+	chat.Participants = compat.Participants{
+		Items:   filteredParticipants,
+		HasMore: hasMoreParticipants,
+		Total:   int64(total),
 	}
+	chat.UnreadCount = int64(room.UnreadMessages)
+	chat.IsArchived = roomState.IsArchived
+	chat.IsMuted = roomState.IsMuted
+	chat.IsPinned = roomState.IsPinned
 
 	if ts := room.SortingTimestamp.UnixMilli(); ts > 0 {
-		chat.LastActivity = time.UnixMilli(ts).UTC().Format(time.RFC3339)
+		chat.LastActivity = time.UnixMilli(ts).UTC()
 	}
 
 	if includePreview && room.PreviewEventRowID > 0 {
@@ -506,8 +504,8 @@ func (s *Server) loadRoomParticipants(ctx context.Context, room *database.Room) 
 			ID:            userID,
 			FullName:      fullName,
 			ImgURL:        string(content.AvatarURL),
-			CannotMessage: &cannotMessage,
-			IsSelf:        &isSelf,
+			CannotMessage: cannotMessage,
+			IsSelf:        isSelf,
 		})
 	}
 
@@ -587,15 +585,11 @@ func firstString(m map[string]any, keys ...string) string {
 	return ""
 }
 
-func mustParseRFC3339(raw string) int64 {
-	if raw == "" {
+func mustParseRFC3339(raw time.Time) int64 {
+	if raw.IsZero() {
 		return 0
 	}
-	parsed, err := time.Parse(time.RFC3339, raw)
-	if err != nil {
-		return 0
-	}
-	return parsed.UnixMilli()
+	return raw.UnixMilli()
 }
 
 func networkFromBridgeID(bridgeID string) string {
