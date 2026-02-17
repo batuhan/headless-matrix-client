@@ -11,6 +11,8 @@ import (
 	"time"
 
 	errs "github.com/batuhan/gomuks-beeper-api/internal/errors"
+	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
 
 func (s *Server) requestBaseURL(r *http.Request) string {
@@ -187,12 +189,18 @@ func (s *Server) oauthProtectedResourceMetadata(w http.ResponseWriter, r *http.R
 		targetPath = "/v1"
 	}
 	baseURL := s.requestBaseURL(r)
-	return writeJSON(w, map[string]any{
-		"resource":                 baseURL + targetPath,
-		"authorization_servers":    []string{baseURL},
-		"bearer_methods_supported": []string{"header"},
-		"scopes_supported":         "read write",
-	})
+	metadata := &oauthex.ProtectedResourceMetadata{
+		Resource:                          baseURL + targetPath,
+		AuthorizationServers:              []string{baseURL},
+		BearerMethodsSupported:            []string{"header", "query"},
+		ScopesSupported:                   []string{"read", "write"},
+		ResourceName:                      "gomuks-beeper-api",
+		ResourceDocumentation:             baseURL + "/v1/spec",
+		ResourcePolicyURI:                 baseURL + "/v1/spec",
+		ResourceSigningAlgValuesSupported: []string{},
+	}
+	mcpauth.ProtectedResourceMetadataHandler(metadata).ServeHTTP(w, r)
+	return nil
 }
 
 func (s *Server) oauthAuthorizationServerMetadata(w http.ResponseWriter, r *http.Request) error {

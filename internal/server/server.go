@@ -42,7 +42,7 @@ func New(cfg config.Config, rt *gomuksruntime.Runtime) *Server {
 		oauthSubject: "local-user",
 	}
 	s.initOAuthState(cfg.AccessToken)
-	s.auth.SetExtraValidator(s.validateBearerToken)
+	s.auth.SetTokenInfoProvider(s.tokenInfoForBearer)
 	s.ws = newWSHub(s)
 	return s
 }

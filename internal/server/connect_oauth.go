@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 )
 
 const (
@@ -147,28 +149,24 @@ func (s *Server) initOAuthState(staticToken string) {
 	}
 }
 
-func (s *Server) validateBearerToken(token string, requiredScopes []string) bool {
+func (s *Server) tokenInfoForBearer(token string) (*mcpauth.TokenInfo, bool) {
 	entry, ok := s.oauthTokenByValue(token)
 	if !ok {
-		return false
+		return nil, false
 	}
-	if len(requiredScopes) == 0 {
-		return true
+	tokenInfo := &mcpauth.TokenInfo{
+		Scopes: entry.Scopes,
+		UserID: entry.Subject,
+		Extra: map[string]any{
+			"client_id": entry.ClientID,
+		},
 	}
-	scopeSet := make(map[string]struct{}, len(entry.Scopes))
-	for _, scope := range entry.Scopes {
-		scopeSet[strings.TrimSpace(scope)] = struct{}{}
+	if entry.ExpiresAt != nil {
+		tokenInfo.Expiration = *entry.ExpiresAt
+	} else {
+		tokenInfo.Expiration = time.Now().Add(10 * 365 * 24 * time.Hour)
 	}
-	for _, required := range requiredScopes {
-		required = strings.TrimSpace(required)
-		if required == "" {
-			continue
-		}
-		if _, hasScope := scopeSet[required]; !hasScope {
-			return false
-		}
-	}
-	return true
+	return tokenInfo, true
 }
 
 func (s *Server) oauthTokenByValue(token string) (oauthAccessToken, bool) {
