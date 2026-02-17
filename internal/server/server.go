@@ -60,6 +60,17 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /v1/spec", s.public(s.openAPISpec))
 	mux.Handle("GET /v0/spec", s.public(s.openAPISpecRedirect))
 	mux.Handle("GET /v1/info", s.public(s.info))
+	mux.Handle("GET /manage", s.public(s.manageUI))
+	mux.Handle("GET /manage/", s.public(s.manageUI))
+	mux.Handle("GET /manage/state", s.public(s.manageState))
+	mux.Handle("POST /manage/discover-homeserver", s.public(s.manageDiscoverHomeserver))
+	mux.Handle("POST /manage/login-flows", s.public(s.manageLoginFlows))
+	mux.Handle("POST /manage/login-password", s.public(s.manageLoginPassword))
+	mux.Handle("POST /manage/login-custom", s.public(s.manageLoginCustom))
+	mux.Handle("POST /manage/verify", s.public(s.manageVerify))
+	mux.Handle("POST /manage/beeper/start-login", s.public(s.manageBeeperStartLogin))
+	mux.Handle("POST /manage/beeper/request-code", s.public(s.manageBeeperRequestCode))
+	mux.Handle("POST /manage/beeper/submit-code", s.public(s.manageBeeperSubmitCode))
 	mux.Handle("GET /.well-known/oauth-protected-resource", s.public(s.oauthProtectedResourceMetadata))
 	mux.Handle("GET /.well-known/oauth-protected-resource/", s.public(s.oauthProtectedResourceMetadata))
 	mux.Handle("GET /.well-known/oauth-authorization-server", s.public(s.oauthAuthorizationServerMetadata))
@@ -154,13 +165,18 @@ func (s *Server) requireBeeperHomeserver() error {
 		return errs.Forbidden("A logged-in Beeper Matrix session is required")
 	}
 	hostname := strings.ToLower(strings.TrimSpace(cli.Client.HomeserverURL.Hostname()))
-	switch {
-	case hostname == "matrix.beeper.com",
-		hostname == "matrix.beeper-staging.com",
-		hostname == "matrix.beeper-dev.com":
+	if isAllowedBeeperHomeserverHost(hostname) {
 		return nil
+	}
+	return errs.Forbidden("Only Beeper homeserver sessions are supported")
+}
+
+func isAllowedBeeperHomeserverHost(hostname string) bool {
+	switch hostname {
+	case "matrix.beeper.com", "matrix.beeper-staging.com", "matrix.beeper-dev.com":
+		return true
 	default:
-		return errs.Forbidden("Only Beeper homeserver sessions are supported")
+		return false
 	}
 }
 

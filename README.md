@@ -31,15 +31,22 @@ BEEPER_ACCESS_TOKEN=your_token go run ./cmd/server
 
 ## Login (Beeper Session)
 
-The HTTP API does not log you into Matrix by itself. It uses the existing gomuks session stored in `BEEPER_STATE_DIR`.
+`gomuks-beeper-api` now includes a built-in setup UI at:
 
-1. Start gomuks once using the same root directory:
+- `http://127.0.0.1:23373/manage` (or your configured listen address)
+
+Flow:
+
+1. Start the server:
 ```bash
-GOMUKS_ROOT="${BEEPER_STATE_DIR:-$HOME/.local/share/gomuks-beeper-api}" go run ../gomuks-api/cmd/gomuks
+BEEPER_ACCESS_TOKEN=your_token go run ./cmd/server
 ```
-2. Sign in with your Beeper Matrix account (`matrix.beeper.com` / staging / dev).
-3. Stop gomuks.
-4. Start `gomuks-beeper-api` with the same `BEEPER_STATE_DIR`.
+2. Open `/manage`.
+3. Log in:
+   - Recommended: use **Beeper Email Login** (request code -> submit code).
+   - Alternative: use **Password Login** (homeserver URL, username, password).
+4. Enter your recovery key/passphrase in **Verification**.
+5. Confirm `is_logged_in=true` and `is_verified=true` in Client State.
 
 If no valid Beeper session exists, protected API calls return `403`.
 
