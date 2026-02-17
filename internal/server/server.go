@@ -3,7 +3,9 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +27,7 @@ type Server struct {
 	oauthCodes   map[string]oauthAuthorizationCode
 	oauthTokens  map[string]oauthAccessToken
 	oauthSubject string
+	oauthState   string
 
 	ws *wsHub
 }
@@ -40,8 +43,12 @@ func New(cfg config.Config, rt *gomuksruntime.Runtime) *Server {
 		oauthCodes:   make(map[string]oauthAuthorizationCode),
 		oauthTokens:  make(map[string]oauthAccessToken),
 		oauthSubject: "local-user",
+		oauthState:   filepath.Join(rt.StateDir(), "oauth", "state.json"),
 	}
 	s.initOAuthState(cfg.AccessToken)
+	if err := s.loadOAuthState(); err != nil {
+		log.Printf("failed to load oauth state: %v", err)
+	}
 	s.auth.SetTokenInfoProvider(s.tokenInfoForBearer)
 	s.ws = newWSHub(s)
 	return s

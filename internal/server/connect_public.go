@@ -344,7 +344,10 @@ func (s *Server) oauthToken(w http.ResponseWriter, r *http.Request) error {
 	codeVerifier := strings.TrimSpace(body["code_verifier"])
 	resource := strings.TrimSpace(body["resource"])
 
-	code, ok := s.popAuthorizationCode(codeValue)
+	code, ok, popErr := s.popAuthorizationCode(codeValue)
+	if popErr != nil {
+		return errs.Internal(fmt.Errorf("failed to consume authorization code: %w", popErr))
+	}
 	if !ok {
 		w.WriteHeader(http.StatusBadRequest)
 		return writeJSON(w, map[string]string{
@@ -424,6 +427,7 @@ func (s *Server) oauthRevoke(w http.ResponseWriter, r *http.Request) error {
 			now := time.Now().UTC()
 			entry.RevokedAt = &now
 			s.oauthTokens[tokenValue] = entry
+			_ = s.persistOAuthStateLocked()
 		}
 		s.oauthMu.Unlock()
 	}
@@ -521,6 +525,10 @@ func (s *Server) oauthRegister(w http.ResponseWriter, r *http.Request) error {
 	}
 	s.oauthMu.Lock()
 	s.oauthClients[client.ClientID] = client
+	if err = s.persistOAuthStateLocked(); err != nil {
+		s.oauthMu.Unlock()
+		return errs.Internal(fmt.Errorf("failed to persist oauth client: %w", err))
+	}
 	s.oauthMu.Unlock()
 
 	baseURL := s.requestBaseURL(r)

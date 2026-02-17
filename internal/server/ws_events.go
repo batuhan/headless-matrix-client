@@ -23,6 +23,9 @@ const (
 	wsFingerprintRetention       = 30 * time.Second
 	wsFingerprintPruneInterval   = 5 * time.Second
 	wsDefaultWriteTimeout        = 5 * time.Second
+	wsKeepaliveInterval          = 30 * time.Second
+	wsPingTimeout                = 5 * time.Second
+	wsReadLimitBytes             = int64(64 * 1024)
 	wsEventQueueSize             = 512
 	wsSubscriptionsCommandType   = "subscriptions.set"
 	wsSubscriptionsUpdatedType   = "subscriptions.updated"
@@ -35,7 +38,6 @@ const (
 	wsErrorCodeInvalidCommand    = "INVALID_COMMAND"
 	wsErrorCodeInvalidPayload    = "INVALID_PAYLOAD"
 	wsErrorCodeInternal          = "INTERNAL_ERROR"
-	wsCodeChallengeMethodS256    = "S256"
 	wsWildcardSubscriptionChatID = "*"
 )
 
@@ -133,12 +135,37 @@ func (h *wsHub) ensureSubscription() error {
 }
 
 func (h *wsHub) run() {
-	for evt := range h.eventQueue {
-		syncComplete, ok := evt.(*jsoncmd.SyncComplete)
-		if !ok || syncComplete == nil {
-			continue
+	keepaliveTicker := time.NewTicker(wsKeepaliveInterval)
+	defer keepaliveTicker.Stop()
+
+	for {
+		select {
+		case evt := <-h.eventQueue:
+			syncComplete, ok := evt.(*jsoncmd.SyncComplete)
+			if !ok || syncComplete == nil {
+				continue
+			}
+			h.processSyncComplete(syncComplete)
+		case <-keepaliveTicker.C:
+			h.pingClients()
 		}
-		h.processSyncComplete(syncComplete)
+	}
+}
+
+func (h *wsHub) pingClients() {
+	h.mu.RLock()
+	clients := make([]*websocket.Conn, 0, len(h.clients))
+	for conn := range h.clients {
+		if conn != nil {
+			clients = append(clients, conn)
+		}
+	}
+	h.mu.RUnlock()
+
+	for _, conn := range clients {
+		ctx, cancel := context.WithTimeout(context.Background(), wsPingTimeout)
+		_ = conn.Ping(ctx)
+		cancel()
 	}
 }
 
@@ -353,6 +380,7 @@ func (s *Server) wsEvents(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return nil
 	}
+	conn.SetReadLimit(wsReadLimitBytes)
 
 	state := &wsClientState{chatIDs: []string{}}
 	s.ws.register(conn, state)
@@ -368,24 +396,88 @@ func (s *Server) wsEvents(w http.ResponseWriter, r *http.Request) error {
 	})
 
 	for {
-		var payload map[string]any
-		if err = wsjson.Read(r.Context(), conn, &payload); err != nil {
+		messageType, rawPayload, readErr := conn.Read(r.Context())
+		if readErr != nil {
 			return nil
 		}
+		if messageType != websocket.MessageText {
+			s.ws.write(conn, state, wsErrorMessage{
+				Type:    wsErrorType,
+				Code:    wsErrorCodeInvalidPayload,
+				Message: "Payload must be an object with a type field",
+			})
+			continue
+		}
 
-		msgType, _ := payload["type"].(string)
-		requestID, _ := payload["requestID"].(string)
+		var payload any
+		if err = json.Unmarshal(rawPayload, &payload); err != nil {
+			s.ws.write(conn, state, wsErrorMessage{
+				Type:    wsErrorType,
+				Code:    wsErrorCodeInvalidPayload,
+				Message: "Invalid JSON payload",
+			})
+			continue
+		}
+		payloadObject, ok := payload.(map[string]any)
+		if !ok {
+			s.ws.write(conn, state, wsErrorMessage{
+				Type:    wsErrorType,
+				Code:    wsErrorCodeInvalidPayload,
+				Message: "Payload must be an object with a type field",
+			})
+			continue
+		}
+
+		msgTypeRaw, hasType := payloadObject["type"]
+		msgType, typeOK := msgTypeRaw.(string)
+		requestID, _ := payloadObject["requestID"].(string)
+		if !hasType || !typeOK {
+			s.ws.write(conn, state, wsErrorMessage{
+				Type:      wsErrorType,
+				RequestID: requestID,
+				Code:      wsErrorCodeInvalidPayload,
+				Message:   "Payload must be an object with a type field",
+			})
+			continue
+		}
 		if msgType != wsSubscriptionsCommandType {
 			s.ws.write(conn, state, wsErrorMessage{
 				Type:      wsErrorType,
 				RequestID: requestID,
 				Code:      wsErrorCodeInvalidCommand,
-				Message:   "Unsupported command type",
+				Message:   "Unsupported command type: " + msgType,
 			})
 			continue
 		}
+		hasUnexpectedKey := false
+		for key := range payloadObject {
+			if key != "type" && key != "requestID" && key != "chatIDs" {
+				hasUnexpectedKey = true
+				break
+			}
+		}
+		if hasUnexpectedKey {
+			s.ws.write(conn, state, wsErrorMessage{
+				Type:      wsErrorType,
+				RequestID: requestID,
+				Code:      wsErrorCodeInvalidPayload,
+				Message:   "Invalid subscriptions payload",
+			})
+			continue
+		}
+		if rawRequestID, ok := payloadObject["requestID"]; ok {
+			if _, castOK := rawRequestID.(string); !castOK {
+				s.ws.write(conn, state, wsErrorMessage{
+					Type:      wsErrorType,
+					RequestID: requestID,
+					Code:      wsErrorCodeInvalidPayload,
+					Message:   "requestID must be a string",
+				})
+				continue
+			}
+		}
 
-		chatIDs, ok := decodeWSChatIDs(payload["chatIDs"])
+		chatIDs, ok := decodeWSChatIDs(payloadObject["chatIDs"])
 		if !ok {
 			s.ws.write(conn, state, wsErrorMessage{
 				Type:      wsErrorType,

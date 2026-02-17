@@ -212,6 +212,10 @@ func (s *Server) issueOAuthAccessToken(clientID string, scopes []string, resourc
 		ClientName: client.ClientName,
 	}
 	s.oauthTokens[tokenValue] = entry
+	if err = s.persistOAuthStateLocked(); err != nil {
+		s.oauthMu.Unlock()
+		return oauthAccessToken{}, err
+	}
 	s.oauthMu.Unlock()
 
 	return entry, nil
@@ -246,21 +250,28 @@ func (s *Server) createAuthorizationCode(
 
 	s.oauthMu.Lock()
 	s.oauthCodes[codeValue] = code
+	if err = s.persistOAuthStateLocked(); err != nil {
+		s.oauthMu.Unlock()
+		return oauthAuthorizationCode{}, err
+	}
 	s.oauthMu.Unlock()
 
 	return code, nil
 }
 
-func (s *Server) popAuthorizationCode(codeValue string) (oauthAuthorizationCode, bool) {
+func (s *Server) popAuthorizationCode(codeValue string) (oauthAuthorizationCode, bool, error) {
 	s.oauthMu.Lock()
 	defer s.oauthMu.Unlock()
 	code, ok := s.oauthCodes[codeValue]
 	if !ok {
-		return oauthAuthorizationCode{}, false
+		return oauthAuthorizationCode{}, false, nil
 	}
 	delete(s.oauthCodes, codeValue)
-	if time.Now().After(code.ExpiresAt) {
-		return oauthAuthorizationCode{}, false
+	if err := s.persistOAuthStateLocked(); err != nil {
+		return oauthAuthorizationCode{}, false, err
 	}
-	return code, true
+	if time.Now().After(code.ExpiresAt) {
+		return oauthAuthorizationCode{}, false, nil
+	}
+	return code, true, nil
 }
