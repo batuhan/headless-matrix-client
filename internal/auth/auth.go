@@ -11,10 +11,15 @@ import (
 type Middleware struct {
 	token               string
 	allowQueryTokenAuth bool
+	extraValidator      func(string) bool
 }
 
 func New(token string, allowQueryTokenAuth bool) *Middleware {
 	return &Middleware{token: token, allowQueryTokenAuth: allowQueryTokenAuth}
+}
+
+func (m *Middleware) SetExtraValidator(validator func(string) bool) {
+	m.extraValidator = validator
 }
 
 func (m *Middleware) Wrap(next http.Handler, allowQueryToken bool) http.Handler {
@@ -23,7 +28,9 @@ func (m *Middleware) Wrap(next http.Handler, allowQueryToken bool) http.Handler 
 		if token == "" && allowQueryToken && m.allowQueryTokenAuth {
 			token = r.URL.Query().Get("dangerouslyUseTokenInQuery")
 		}
-		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(m.token)) != 1 {
+		staticTokenValid := subtle.ConstantTimeCompare([]byte(token), []byte(m.token)) == 1
+		extraTokenValid := m.extraValidator != nil && m.extraValidator(token)
+		if token == "" || (!staticTokenValid && !extraTokenValid) {
 			errs.Write(w, errs.Unauthorized("Unauthorized: missing or invalid token"))
 			return
 		}

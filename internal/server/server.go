@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/batuhan/gomuks-beeper-api/internal/auth"
 	"github.com/batuhan/gomuks-beeper-api/internal/config"
@@ -18,22 +19,59 @@ type Server struct {
 	cfg  config.Config
 	rt   *gomuksruntime.Runtime
 	auth *auth.Middleware
+
+	oauthMu      sync.RWMutex
+	oauthClients map[string]oauthClient
+	oauthCodes   map[string]oauthAuthorizationCode
+	oauthTokens  map[string]oauthAccessToken
+	oauthSubject string
+
+	ws *wsHub
 }
 
 type apiHandler func(http.ResponseWriter, *http.Request) error
 
 func New(cfg config.Config, rt *gomuksruntime.Runtime) *Server {
-	return &Server{
-		cfg:  cfg,
-		rt:   rt,
-		auth: auth.New(cfg.AccessToken, cfg.AllowQueryTokenAuth),
+	s := &Server{
+		cfg:          cfg,
+		rt:           rt,
+		auth:         auth.New(cfg.AccessToken, cfg.AllowQueryTokenAuth),
+		oauthClients: make(map[string]oauthClient),
+		oauthCodes:   make(map[string]oauthAuthorizationCode),
+		oauthTokens:  make(map[string]oauthAccessToken),
+		oauthSubject: "local-user",
 	}
+	s.initOAuthState(cfg.AccessToken)
+	s.auth.SetExtraValidator(s.validateBearerToken)
+	s.ws = newWSHub(s)
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
+	mux.Handle("GET /v1/spec", s.public(s.openAPISpec))
+	mux.Handle("GET /v0/spec", s.public(s.openAPISpecRedirect))
+	mux.Handle("GET /v1/info", s.public(s.info))
+	mux.Handle("GET /.well-known/oauth-protected-resource", s.public(s.oauthProtectedResourceMetadata))
+	mux.Handle("GET /.well-known/oauth-protected-resource/", s.public(s.oauthProtectedResourceMetadata))
+	mux.Handle("GET /.well-known/oauth-authorization-server", s.public(s.oauthAuthorizationServerMetadata))
+	mux.Handle("GET /oauth/authorize", s.public(s.oauthAuthorize))
+	mux.Handle("POST /oauth/authorize/callback", s.public(s.oauthAuthorizeCallback))
+	mux.Handle("POST /oauth/token", s.public(s.oauthToken))
+	mux.Handle("GET /oauth/userinfo", s.public(s.oauthUserInfo))
+	mux.Handle("POST /oauth/revoke", s.public(s.oauthRevoke))
+	mux.Handle("POST /oauth/introspect", s.public(s.oauthIntrospect))
+	mux.Handle("POST /oauth/register", s.public(s.oauthRegister))
+	mux.Handle("POST /register", s.public(s.oauthRegister))
+	mux.Handle("GET /deeplink", s.public(s.deeplink))
+	mux.Handle("GET /deeplink/", s.public(s.deeplink))
+	mux.Handle("GET /focus", s.public(s.focusPage))
+	mux.Handle("GET /focus/{chatID}", s.public(s.focusPage))
+	mux.Handle("GET /focus/{chatID}/{messageID}", s.public(s.focusPage))
+
 	s.handle(mux, "GET /v1/accounts", s.getAccounts, false)
+	s.handle(mux, "GET /v0/get-accounts", s.getAccounts, false)
 
 	s.handle(mux, "GET /v1/chats", s.listChats, false)
 	s.handle(mux, "POST /v1/chats", s.createChat, false)
@@ -49,10 +87,19 @@ func (s *Server) Handler() http.Handler {
 	s.handle(mux, "POST /v1/chats/{chatID}/messages/{messageID}/reactions", s.addReaction, false)
 	s.handle(mux, "DELETE /v1/chats/{chatID}/messages/{messageID}/reactions", s.removeReaction, false)
 	s.handle(mux, "GET /v1/messages/search", s.searchMessages, false)
+	s.handle(mux, "GET /v0/search-messages", s.searchMessages, false)
+	s.handle(mux, "GET /v0/search-chats", s.searchChats, false)
+	s.handle(mux, "GET /v0/get-chat", s.getChat, false)
+	s.handle(mux, "POST /v0/create-chat", s.createChat, false)
+	s.handle(mux, "POST /v0/archive-chat", s.archiveChat, false)
+	s.handle(mux, "POST /v0/set-chat-reminder", s.setChatReminder, false)
+	s.handle(mux, "POST /v0/clear-chat-reminder", s.clearChatReminder, false)
+	s.handle(mux, "POST /v0/send-message", s.sendMessage, false)
 	s.handle(mux, "GET /v1/ws", s.wsEvents, true)
 	s.handle(mux, "GET /ws", s.wsEvents, true)
 
 	s.handle(mux, "POST /v1/assets/download", s.downloadAsset, false)
+	s.handle(mux, "POST /v0/download-asset", s.downloadAsset, false)
 	s.handle(mux, "GET /v1/assets/serve", s.serveAsset, true)
 	s.handle(mux, "POST /v1/assets/upload", s.uploadAsset, false)
 	s.handle(mux, "POST /v1/assets/upload/base64", s.uploadAsset, false)
@@ -60,7 +107,10 @@ func (s *Server) Handler() http.Handler {
 	s.handle(mux, "GET /v1/accounts/{accountID}/contacts", s.searchContacts, false)
 	s.handle(mux, "GET /v1/accounts/{accountID}/contacts/list", s.listContacts, false)
 	s.handle(mux, "GET /v1/search", s.search, false)
+	s.handle(mux, "GET /v0/search", s.search, false)
 	s.handle(mux, "POST /v1/focus", s.focusApp, false)
+	s.handle(mux, "POST /v0/focus-app", s.focusApp, false)
+	s.handle(mux, "POST /v0/open-app", s.focusApp, false)
 
 	return mux
 }
@@ -76,6 +126,14 @@ func (s *Server) wrap(handler apiHandler) http.Handler {
 			errs.Write(w, err)
 			return
 		}
+		if err := handler(w, r); err != nil {
+			errs.Write(w, err)
+		}
+	})
+}
+
+func (s *Server) public(handler apiHandler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := handler(w, r); err != nil {
 			errs.Write(w, err)
 		}

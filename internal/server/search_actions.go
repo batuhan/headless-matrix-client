@@ -75,6 +75,7 @@ type searchMessagesParams struct {
 }
 
 type reminderInput struct {
+	ChatID   string `json:"chatID,omitempty"`
 	Reminder struct {
 		RemindAtMS               int64 `json:"remindAtMs"`
 		DismissOnIncomingMessage *bool `json:"dismissOnIncomingMessage,omitempty"`
@@ -531,12 +532,13 @@ func userIDMatches(left, right string) bool {
 
 func (s *Server) archiveChat(w http.ResponseWriter, r *http.Request) error {
 	var req struct {
-		Archived *bool `json:"archived,omitempty"`
+		Archived *bool  `json:"archived,omitempty"`
+		ChatID   string `json:"chatID,omitempty"`
 	}
 	if err := decodeJSONIfPresent(r, &req); err != nil {
 		return errs.Validation(map[string]any{"error": err.Error()})
 	}
-	chatID := readChatID(r, "")
+	chatID := readChatID(r, req.ChatID)
 	if chatID == "" {
 		return errs.Validation(map[string]any{"chatID": "chatID is required"})
 	}
@@ -560,7 +562,7 @@ func (s *Server) setChatReminder(w http.ResponseWriter, r *http.Request) error {
 	if err := decodeJSON(r, &req); err != nil {
 		return err
 	}
-	chatID := readChatID(r, "")
+	chatID := readChatID(r, req.ChatID)
 	if chatID == "" {
 		return errs.Validation(map[string]any{"chatID": "chatID is required"})
 	}
@@ -587,7 +589,13 @@ func (s *Server) setChatReminder(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) clearChatReminder(w http.ResponseWriter, r *http.Request) error {
-	chatID := readChatID(r, "")
+	var req struct {
+		ChatID string `json:"chatID,omitempty"`
+	}
+	if err := decodeJSONIfPresent(r, &req); err != nil {
+		return errs.Validation(map[string]any{"error": err.Error()})
+	}
+	chatID := readChatID(r, req.ChatID)
 	if chatID == "" {
 		return errs.Validation(map[string]any{"chatID": "chatID is required"})
 	}

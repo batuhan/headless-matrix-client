@@ -2,6 +2,7 @@ package gomuksruntime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -71,4 +72,25 @@ func (r *Runtime) Client() *hicli.HiClient {
 
 func (r *Runtime) StateDir() string {
 	return r.cfg.StateDir
+}
+
+func (r *Runtime) SubscribeEvents(handler func(any)) (func(), error) {
+	if handler == nil {
+		return nil, errors.New("handler is required")
+	}
+	if r.gmx == nil || r.gmx.EventBuffer == nil {
+		return nil, errors.New("gomuks runtime is not started")
+	}
+
+	listenerID, _ := r.gmx.EventBuffer.Subscribe(0, nil, func(evt *gomuks.BufferedEvent) {
+		if evt == nil {
+			return
+		}
+		handler(evt.Data)
+	})
+	return func() {
+		if r.gmx != nil && r.gmx.EventBuffer != nil {
+			r.gmx.EventBuffer.Unsubscribe(listenerID)
+		}
+	}, nil
 }
