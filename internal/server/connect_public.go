@@ -53,68 +53,8 @@ func renderSimpleHTML(title, body string) string {
 }
 
 func (s *Server) openAPISpec(w http.ResponseWriter, r *http.Request) error {
-	baseURL := s.requestBaseURL(r)
-	paths := map[string]any{
-		"/v1/accounts":                                      map[string]any{"get": map[string]any{"security": []map[string][]string{{"bearerAuth": []string{}}}}},
-		"/v1/chats":                                         map[string]any{"get": map[string]any{}, "post": map[string]any{}},
-		"/v1/chats/{chatID}":                                map[string]any{"get": map[string]any{}},
-		"/v1/chats/search":                                  map[string]any{"get": map[string]any{}},
-		"/v1/chats/{chatID}/archive":                        map[string]any{"post": map[string]any{}},
-		"/v1/chats/{chatID}/reminders":                      map[string]any{"post": map[string]any{}, "delete": map[string]any{}},
-		"/v1/chats/{chatID}/messages":                       map[string]any{"get": map[string]any{}, "post": map[string]any{}},
-		"/v1/chats/{chatID}/messages/{messageID}":           map[string]any{"put": map[string]any{}},
-		"/v1/chats/{chatID}/messages/{messageID}/reactions": map[string]any{"post": map[string]any{}, "delete": map[string]any{}},
-		"/v1/messages/search":                               map[string]any{"get": map[string]any{}},
-		"/v1/search":                                        map[string]any{"get": map[string]any{}},
-		"/v1/focus":                                         map[string]any{"post": map[string]any{}},
-		"/v1/assets/download":                               map[string]any{"post": map[string]any{}},
-		"/v1/assets/upload":                                 map[string]any{"post": map[string]any{}},
-		"/v1/assets/upload/base64":                          map[string]any{"post": map[string]any{}},
-		"/v1/assets/serve":                                  map[string]any{"get": map[string]any{}},
-		"/v1/accounts/{accountID}/contacts":                 map[string]any{"get": map[string]any{}},
-		"/v1/accounts/{accountID}/contacts/list":            map[string]any{"get": map[string]any{}},
-		"/v1/ws":                                            map[string]any{"get": map[string]any{"description": "WebSocket endpoint"}},
-		"/ws":                                               map[string]any{"get": map[string]any{"description": "WebSocket alias"}},
-		"/v1/info":                                          map[string]any{"get": map[string]any{"security": []any{}}},
-		"/oauth/authorize":                                  map[string]any{"get": map[string]any{"security": []any{}}},
-		"/oauth/token":                                      map[string]any{"post": map[string]any{"security": []any{}}},
-		"/oauth/introspect":                                 map[string]any{"post": map[string]any{"security": []any{}}},
-		"/oauth/revoke":                                     map[string]any{"post": map[string]any{"security": []any{}}},
-		"/oauth/userinfo":                                   map[string]any{"get": map[string]any{}},
-		"/oauth/register":                                   map[string]any{"post": map[string]any{"security": []any{}}},
-	}
-
-	spec := map[string]any{
-		"openapi": "3.1.0",
-		"info": map[string]any{
-			"title":   "Beeper Desktop API-compatible server",
-			"version": appVersion,
-		},
-		"servers": []map[string]any{{"url": baseURL}},
-		"components": map[string]any{
-			"securitySchemes": map[string]any{
-				"bearerAuth": map[string]any{
-					"type":   "http",
-					"scheme": "bearer",
-				},
-				"oauth2": map[string]any{
-					"type": "oauth2",
-					"flows": map[string]any{
-						"authorizationCode": map[string]any{
-							"authorizationUrl": baseURL + "/oauth/authorize",
-							"tokenUrl":         baseURL + "/oauth/token",
-							"scopes": map[string]string{
-								"read":  "Read access",
-								"write": "Write access",
-							},
-						},
-					},
-				},
-			},
-		},
-		"paths": paths,
-	}
-	return writeJSON(w, spec)
+	http.Redirect(w, r, "https://developers.beeper.com/desktop-api", http.StatusTemporaryRedirect)
+	return nil
 }
 
 func (s *Server) openAPISpecRedirect(w http.ResponseWriter, r *http.Request) error {

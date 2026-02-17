@@ -12,6 +12,7 @@ import (
 
 	"go.mau.fi/gomuks/pkg/hicli/database"
 	"maunium.net/go/mautrix"
+	"maunium.net/go/mautrix/bridgev2/provisionutil"
 	"maunium.net/go/mautrix/id"
 
 	"github.com/batuhan/gomuks-beeper-api/internal/compat"
@@ -29,6 +30,12 @@ const (
 	searchContactsMaxLimit     = 200
 	unifiedChatSectionLimit    = 30
 	unifiedMessageSectionLimit = 20
+
+	contactSourceScoreCloudList    = 100
+	contactSourceScoreParticipants = 120
+	contactSourceScoreDirectory    = 200
+	contactSourceScoreLookup       = 300
+	contactLookupMaxCandidates     = 4
 )
 
 const timelineSearchGlobalBase = `
@@ -86,6 +93,12 @@ type contactCursor struct {
 	Index int `json:"index"`
 }
 
+type contactCandidate struct {
+	User  compat.User
+	Key   string
+	Score int
+}
+
 func (s *Server) searchChats(w http.ResponseWriter, r *http.Request) error {
 	params, err := parseSearchChatsParams(r)
 	if err != nil {
@@ -126,31 +139,12 @@ func (s *Server) searchContacts(w http.ResponseWriter, r *http.Request) error {
 	if _, ok := lookup.ByID[accountID]; !ok {
 		return errs.NotFound("Account not found")
 	}
-
-	resp, err := s.rt.Client().Client.SearchUserDirectory(r.Context(), query, 50)
+	items, err := s.loadAccountContacts(r.Context(), lookup, accountID, query)
 	if err != nil {
-		return errs.Internal(fmt.Errorf("failed to search user directory: %w", err))
+		return err
 	}
-	items := make([]compat.User, 0, len(resp.Results))
-	for _, user := range resp.Results {
-		if user == nil {
-			continue
-		}
-		cannotMessage := false
-		isSelf := user.UserID == s.rt.Client().Account.UserID
-		fullName := strings.TrimSpace(user.DisplayName)
-		if fullName == "" {
-			fullName = user.UserID.String()
-		}
-		username := strings.TrimPrefix(strings.SplitN(user.UserID.String(), ":", 2)[0], "@")
-		items = append(items, compat.User{
-			ID:            user.UserID.String(),
-			Username:      username,
-			FullName:      fullName,
-			ImgURL:        user.AvatarURL.String(),
-			CannotMessage: cannotMessage,
-			IsSelf:        isSelf,
-		})
+	if len(items) > searchContactsMaxLimit {
+		items = items[:searchContactsMaxLimit]
 	}
 	return writeJSON(w, compat.SearchContactsOutput{Items: items})
 }
@@ -675,11 +669,28 @@ func parseContactCursor(raw string) (*contactCursor, error) {
 }
 
 func (s *Server) loadAccountContacts(ctx context.Context, lookup *accountLookup, accountID, query string) ([]compat.User, error) {
+	query = strings.TrimSpace(query)
 	rooms, err := s.loadRoomsSorted(ctx)
 	if err != nil {
 		return nil, err
 	}
-	contactsByID := make(map[string]compat.User)
+	candidates := make([]contactCandidate, 0, 256)
+	addCandidate := func(user compat.User, baseScore int) {
+		normalized, ok := normalizeContactUser(user)
+		if !ok || normalized.IsSelf {
+			return
+		}
+		score := scoreContactForQuery(normalized, query, baseScore)
+		if score < 0 {
+			return
+		}
+		candidates = append(candidates, contactCandidate{
+			User:  normalized,
+			Key:   contactCandidateKey(normalized),
+			Score: score,
+		})
+	}
+
 	for _, room := range rooms {
 		mappedAccountID, _ := inferAccountForRoom(room.ID, lookup)
 		if mappedAccountID != accountID {
@@ -694,68 +705,35 @@ func (s *Server) loadAccountContacts(ctx context.Context, lookup *accountLookup,
 			if participant.Username == "" {
 				participant.Username = userIDLocalpart(participant.ID)
 			}
-			if !contactMatchesQuery(participant, query) {
-				continue
-			}
-			existing, ok := contactsByID[participant.ID]
-			if ok {
-				contactsByID[participant.ID] = mergeContactUsers(existing, participant)
-			} else {
-				contactsByID[participant.ID] = participant
-			}
+			addCandidate(participant, contactSourceScoreParticipants)
 		}
+	}
+
+	cloudContacts, _ := s.fetchCloudBridgeContacts(ctx, accountID)
+	for _, resolved := range cloudContacts {
+		if resolved == nil {
+			continue
+		}
+		addCandidate(s.mapResolvedIdentifierToUser(resolved), contactSourceScoreCloudList)
 	}
 
 	if query != "" {
+		for _, identifier := range buildIdentifierLookupCandidates(query) {
+			resolved, _ := s.resolveCloudBridgeIdentifier(ctx, accountID, identifier)
+			if resolved == nil {
+				continue
+			}
+			addCandidate(s.mapResolvedIdentifierToUser(resolved), contactSourceScoreLookup)
+		}
 		resp, searchErr := s.rt.Client().Client.SearchUserDirectory(ctx, query, searchContactsMaxLimit)
 		if searchErr == nil {
 			for _, user := range resp.Results {
-				if user == nil {
-					continue
-				}
-				mapped := compat.User{
-					ID:            strings.TrimSpace(user.UserID.String()),
-					Username:      userIDLocalpart(user.UserID.String()),
-					FullName:      strings.TrimSpace(user.DisplayName),
-					ImgURL:        user.AvatarURL.String(),
-					CannotMessage: false,
-					IsSelf:        user.UserID == s.rt.Client().Account.UserID,
-				}
-				if mapped.ID == "" || mapped.IsSelf {
-					continue
-				}
-				if mapped.FullName == "" {
-					mapped.FullName = mapped.ID
-				}
-				existing, ok := contactsByID[mapped.ID]
-				if ok {
-					contactsByID[mapped.ID] = mergeContactUsers(existing, mapped)
-				} else {
-					contactsByID[mapped.ID] = mapped
-				}
+				addCandidate(s.mapDirectoryUserToContact(user), contactSourceScoreDirectory)
 			}
 		}
 	}
 
-	contacts := make([]compat.User, 0, len(contactsByID))
-	for _, contact := range contactsByID {
-		if contact.FullName == "" {
-			contact.FullName = contact.ID
-		}
-		contacts = append(contacts, contact)
-	}
-	sort.Slice(contacts, func(i, j int) bool {
-		leftName := strings.ToLower(strings.TrimSpace(contacts[i].FullName))
-		rightName := strings.ToLower(strings.TrimSpace(contacts[j].FullName))
-		if leftName != rightName {
-			return leftName < rightName
-		}
-		if contacts[i].Username != contacts[j].Username {
-			return contacts[i].Username < contacts[j].Username
-		}
-		return contacts[i].ID < contacts[j].ID
-	})
-	return contacts, nil
+	return mergeContactCandidates(candidates), nil
 }
 
 func mergeContactUsers(existing, incoming compat.User) compat.User {
@@ -777,6 +755,376 @@ func mergeContactUsers(existing, incoming compat.User) compat.User {
 	existing.IsSelf = existing.IsSelf || incoming.IsSelf
 	existing.CannotMessage = existing.CannotMessage || incoming.CannotMessage
 	return existing
+}
+
+func normalizeContactUser(user compat.User) (compat.User, bool) {
+	user.ID = strings.TrimSpace(user.ID)
+	user.Username = normalizeUsername(user.Username)
+	user.PhoneNumber = normalizePhoneNumber(user.PhoneNumber)
+	user.Email = normalizeEmail(user.Email)
+	user.FullName = strings.TrimSpace(user.FullName)
+	user.ImgURL = strings.TrimSpace(user.ImgURL)
+	if user.ID == "" {
+		switch {
+		case user.PhoneNumber != "":
+			user.ID = user.PhoneNumber
+		case user.Email != "":
+			user.ID = user.Email
+		case user.Username != "":
+			user.ID = user.Username
+		}
+	}
+	if user.ID == "" {
+		return compat.User{}, false
+	}
+	if user.Username == "" && strings.HasPrefix(user.ID, "@") {
+		user.Username = userIDLocalpart(user.ID)
+	}
+	if user.FullName == "" {
+		user.FullName = user.ID
+	}
+	return user, true
+}
+
+func scoreContactForQuery(user compat.User, query string, baseScore int) int {
+	query = strings.ToLower(strings.TrimSpace(query))
+	if query == "" {
+		return baseScore
+	}
+	candidates := []string{
+		strings.ToLower(strings.TrimSpace(user.ID)),
+		strings.ToLower(strings.TrimSpace(user.FullName)),
+		strings.ToLower(strings.TrimSpace(user.Username)),
+		strings.ToLower(strings.TrimSpace(user.Email)),
+		strings.ToLower(strings.TrimSpace(user.PhoneNumber)),
+	}
+	for _, candidate := range candidates {
+		if candidate == "" {
+			continue
+		}
+		if candidate == query {
+			return baseScore + 300
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate != "" && strings.HasPrefix(candidate, query) {
+			return baseScore + 200
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate != "" && strings.Contains(candidate, query) {
+			return baseScore + 100
+		}
+	}
+	return -1
+}
+
+func contactCandidateKey(user compat.User) string {
+	switch {
+	case strings.TrimSpace(user.ID) != "":
+		return "id:" + strings.ToLower(strings.TrimSpace(user.ID))
+	case normalizePhoneNumber(user.PhoneNumber) != "":
+		return "phone:" + normalizePhoneNumber(user.PhoneNumber)
+	case normalizeEmail(user.Email) != "":
+		return "email:" + normalizeEmail(user.Email)
+	case normalizeUsername(user.Username) != "":
+		return "username:" + normalizeUsername(user.Username)
+	default:
+		return ""
+	}
+}
+
+func mergeContactCandidates(candidates []contactCandidate) []compat.User {
+	merged := make(map[string]contactCandidate, len(candidates))
+	for _, candidate := range candidates {
+		key := candidate.Key
+		if key == "" {
+			continue
+		}
+		existing, ok := merged[key]
+		if !ok {
+			merged[key] = candidate
+			continue
+		}
+		preferred := candidate.Score > existing.Score
+		winner := existing.User
+		loser := candidate.User
+		if preferred {
+			winner = candidate.User
+			loser = existing.User
+		}
+		merged[key] = contactCandidate{
+			User:  mergeContactUsers(winner, loser),
+			Key:   key,
+			Score: max(existing.Score, candidate.Score),
+		}
+	}
+
+	contacts := make([]contactCandidate, 0, len(merged))
+	for _, contact := range merged {
+		contacts = append(contacts, contact)
+	}
+	sort.Slice(contacts, func(i, j int) bool {
+		if contacts[i].Score != contacts[j].Score {
+			return contacts[i].Score > contacts[j].Score
+		}
+		leftName := strings.ToLower(strings.TrimSpace(contacts[i].User.FullName))
+		rightName := strings.ToLower(strings.TrimSpace(contacts[j].User.FullName))
+		if leftName != rightName {
+			return leftName < rightName
+		}
+		if contacts[i].User.Username != contacts[j].User.Username {
+			return contacts[i].User.Username < contacts[j].User.Username
+		}
+		return contacts[i].User.ID < contacts[j].User.ID
+	})
+
+	items := make([]compat.User, 0, len(contacts))
+	for _, candidate := range contacts {
+		items = append(items, candidate.User)
+	}
+	return items
+}
+
+func (s *Server) mapDirectoryUserToContact(user *mautrix.UserDirectoryEntry) compat.User {
+	if user == nil {
+		return compat.User{}
+	}
+	fullName := strings.TrimSpace(user.DisplayName)
+	if fullName == "" {
+		fullName = user.UserID.String()
+	}
+	return compat.User{
+		ID:            strings.TrimSpace(user.UserID.String()),
+		Username:      userIDLocalpart(user.UserID.String()),
+		FullName:      fullName,
+		ImgURL:        user.AvatarURL.String(),
+		CannotMessage: false,
+		IsSelf:        user.UserID == s.rt.Client().Account.UserID,
+	}
+}
+
+func (s *Server) mapResolvedIdentifierToUser(resolved *provisionutil.RespResolveIdentifier) compat.User {
+	if resolved == nil {
+		return compat.User{}
+	}
+	phoneNumber, email, username := parseRemoteContactIdentifiers(resolved.Identifiers)
+	userID := strings.TrimSpace(string(resolved.MXID))
+	if userID == "" {
+		userID = strings.TrimSpace(string(resolved.ID))
+	}
+	if userID == "" {
+		switch {
+		case phoneNumber != "":
+			userID = phoneNumber
+		case email != "":
+			userID = email
+		default:
+			userID = username
+		}
+	}
+
+	selfUserID := ""
+	if s.rt.Client() != nil && s.rt.Client().Account != nil {
+		selfUserID = string(s.rt.Client().Account.UserID)
+	}
+	return compat.User{
+		ID:            userID,
+		Username:      username,
+		PhoneNumber:   phoneNumber,
+		Email:         email,
+		FullName:      strings.TrimSpace(resolved.Name),
+		ImgURL:        strings.TrimSpace(string(resolved.AvatarURL)),
+		CannotMessage: false,
+		IsSelf:        userIDMatches(userID, selfUserID),
+	}
+}
+
+func splitDesktopAccountID(accountID string) (bridgeID, loginID string) {
+	accountID = strings.TrimSpace(accountID)
+	if accountID == "" {
+		return "", ""
+	}
+	parts := strings.SplitN(accountID, "_", 2)
+	if len(parts) != 2 {
+		return "", ""
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+}
+
+func (s *Server) fetchCloudBridgeContacts(ctx context.Context, accountID string) ([]*provisionutil.RespResolveIdentifier, error) {
+	bridgeID, loginID := splitDesktopAccountID(accountID)
+	if bridgeID == "" || loginID == "" || bridgeID == "matrix" {
+		return nil, nil
+	}
+	cli := s.rt.Client()
+	if cli == nil || cli.Client == nil || cli.Account == nil {
+		return nil, nil
+	}
+	urlPath := cli.Client.BuildURLWithQuery(
+		mautrix.ClientURLPath{"unstable", "com.beeper.bridge", bridgeID, "_matrix", "provision", "v3", "contacts"},
+		map[string]string{
+			"user_id":  string(cli.Account.UserID),
+			"login_id": loginID,
+		},
+	)
+	var resp provisionutil.RespGetContactList
+	if _, err := cli.Client.MakeRequest(ctx, http.MethodGet, urlPath, nil, &resp); err != nil {
+		return nil, nil
+	}
+	return resp.Contacts, nil
+}
+
+func (s *Server) resolveCloudBridgeIdentifier(ctx context.Context, accountID, identifier string) (*provisionutil.RespResolveIdentifier, error) {
+	bridgeID, loginID := splitDesktopAccountID(accountID)
+	identifier = strings.TrimSpace(identifier)
+	if bridgeID == "" || loginID == "" || identifier == "" || bridgeID == "matrix" {
+		return nil, nil
+	}
+	cli := s.rt.Client()
+	if cli == nil || cli.Client == nil || cli.Account == nil {
+		return nil, nil
+	}
+	urlPath := cli.Client.BuildURLWithQuery(
+		mautrix.ClientURLPath{"unstable", "com.beeper.bridge", bridgeID, "_matrix", "provision", "v3", "resolve_identifier", identifier},
+		map[string]string{
+			"user_id":  string(cli.Account.UserID),
+			"login_id": loginID,
+		},
+	)
+	var resp provisionutil.RespResolveIdentifier
+	if _, err := cli.Client.MakeRequest(ctx, http.MethodGet, urlPath, nil, &resp); err != nil {
+		return nil, nil
+	}
+	return &resp, nil
+}
+
+func buildIdentifierLookupCandidates(query string) []string {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return nil
+	}
+	candidates := make([]string, 0, contactLookupMaxCandidates)
+	add := func(value string) {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return
+		}
+		for _, existing := range candidates {
+			if strings.EqualFold(existing, value) {
+				return
+			}
+		}
+		candidates = append(candidates, value)
+	}
+	add(query)
+	add(normalizePhoneNumber(query))
+	add(normalizeEmail(query))
+	add(normalizeUsername(query))
+	if strings.HasPrefix(query, "@") {
+		add(strings.TrimPrefix(query, "@"))
+	}
+	if len(candidates) > contactLookupMaxCandidates {
+		candidates = candidates[:contactLookupMaxCandidates]
+	}
+	return candidates
+}
+
+func normalizePhoneNumber(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	var builder strings.Builder
+	for i, r := range value {
+		if r >= '0' && r <= '9' {
+			builder.WriteRune(r)
+			continue
+		}
+		if r == '+' && i == 0 {
+			builder.WriteRune(r)
+		}
+	}
+	return builder.String()
+}
+
+func normalizeEmail(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	return value
+}
+
+func normalizeUsername(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return ""
+	}
+	if strings.HasPrefix(value, "@") {
+		return strings.TrimPrefix(value, "@")
+	}
+	return value
+}
+
+func isLikelyEmail(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || strings.Contains(value, " ") {
+		return false
+	}
+	at := strings.Index(value, "@")
+	if at <= 0 || at == len(value)-1 {
+		return false
+	}
+	domain := value[at+1:]
+	return strings.Contains(domain, ".")
+}
+
+func isLikelyPhone(value string) bool {
+	cleaned := normalizePhoneNumber(value)
+	digits := strings.TrimPrefix(cleaned, "+")
+	return len(digits) >= 7
+}
+
+func isLikelyUsername(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	value = strings.TrimPrefix(value, "@")
+	if len(value) < 2 {
+		return false
+	}
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '.', r == '_', r == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func parseRemoteContactIdentifiers(identifiers []string) (phoneNumber, email, username string) {
+	for _, raw := range identifiers {
+		identifier := strings.TrimSpace(raw)
+		if identifier == "" {
+			continue
+		}
+		switch {
+		case phoneNumber == "" && strings.HasPrefix(identifier, "tel:"):
+			phoneNumber = normalizePhoneNumber(strings.TrimPrefix(identifier, "tel:"))
+		case email == "" && strings.HasPrefix(identifier, "mailto:"):
+			email = normalizeEmail(strings.TrimPrefix(identifier, "mailto:"))
+		case phoneNumber == "" && isLikelyPhone(identifier):
+			phoneNumber = normalizePhoneNumber(identifier)
+		case email == "" && isLikelyEmail(identifier):
+			email = normalizeEmail(identifier)
+		case username == "" && isLikelyUsername(identifier):
+			username = normalizeUsername(identifier)
+		}
+	}
+	return phoneNumber, email, username
 }
 
 func userIDLocalpart(userID string) string {
