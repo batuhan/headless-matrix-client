@@ -50,6 +50,7 @@ func (s *Server) Handler() http.Handler {
 	s.handle(mux, "DELETE /v1/chats/{chatID}/messages/{messageID}/reactions", s.removeReaction, false)
 	s.handle(mux, "GET /v1/messages/search", s.searchMessages, false)
 	s.handle(mux, "GET /v1/ws", s.wsEvents, true)
+	s.handle(mux, "GET /ws", s.wsEvents, true)
 
 	s.handle(mux, "POST /v1/assets/download", s.downloadAsset, false)
 	s.handle(mux, "GET /v1/assets/serve", s.serveAsset, true)
