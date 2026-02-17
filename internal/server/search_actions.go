@@ -1285,12 +1285,8 @@ func (s *Server) searchMessagesCore(ctx context.Context, params searchMessagesPa
 	for _, chatID := range params.ChatIDs {
 		chatIDFilter[chatID] = struct{}{}
 	}
-	namesByRoom := make(map[id.RoomID]map[string]string)
-	reactionsByRoom := make(map[id.RoomID]map[id.EventID][]compat.Reaction)
-	items := make([]compat.Message, 0, params.Limit+1)
-	itemRowIDs := make([]int64, 0, params.Limit+1)
-	usedRooms := make(map[id.RoomID]struct{})
-
+	candidateEvents := make([]*database.Event, 0, len(events))
+	eventsByRoom := make(map[id.RoomID][]*database.Event)
 	for _, evt := range events {
 		room, ok := roomByID[evt.RoomID]
 		if !ok || room == nil {
@@ -1319,29 +1315,40 @@ func (s *Server) searchMessagesCore(ctx context.Context, params searchMessagesPa
 		if params.ChatType == "group" && room.DMUserID != nil && *room.DMUserID != "" {
 			continue
 		}
+		candidateEvents = append(candidateEvents, evt)
+		eventsByRoom[room.ID] = append(eventsByRoom[room.ID], evt)
+	}
 
-		names := namesByRoom[room.ID]
+	if err = s.populateLastEditRefs(ctx, candidateEvents); err != nil {
+		return compat.SearchMessagesOutput{}, err
+	}
+
+	namesByRoom := make(map[id.RoomID]map[string]string, len(eventsByRoom))
+	reactionsByRoom := make(map[id.RoomID]map[id.EventID][]compat.Reaction, len(eventsByRoom))
+	for roomID, roomEvents := range eventsByRoom {
+		names := namesByRoom[roomID]
 		if names == nil {
-			names = s.loadMemberNameMap(ctx, room.ID)
-			namesByRoom[room.ID] = names
+			names = s.loadMemberNameMap(ctx, roomID)
+			namesByRoom[roomID] = names
 		}
-		reactions := reactionsByRoom[room.ID]
-		if reactions == nil {
-			reactions = make(map[id.EventID][]compat.Reaction)
-			reactionsByRoom[room.ID] = reactions
+		roomReactions, reactionErr := s.loadReactionMap(ctx, roomID, roomEvents)
+		if reactionErr != nil {
+			return compat.SearchMessagesOutput{}, reactionErr
 		}
-		if _, ok = reactions[evt.ID]; !ok {
-			roomReactionMap, reactionErr := s.loadReactionMap(ctx, room.ID, []*database.Event{evt})
-			if reactionErr == nil {
-				for eventID, roomReactions := range roomReactionMap {
-					reactions[eventID] = roomReactions
-				}
-			}
-		}
+		reactionsByRoom[roomID] = roomReactions
+	}
 
+	items := make([]compat.Message, 0, params.Limit+1)
+	itemRowIDs := make([]int64, 0, params.Limit+1)
+	usedRooms := make(map[id.RoomID]struct{})
+	for _, evt := range candidateEvents {
+		room := roomByID[evt.RoomID]
+		if room == nil {
+			continue
+		}
 		msg, mapErr := s.mapEventToMessage(ctx, evt, room, lookup, reactionBundle{
-			Names:     names,
-			Reactions: reactions,
+			Names:     namesByRoom[room.ID],
+			Reactions: reactionsByRoom[room.ID],
 		})
 		if errors.Is(mapErr, errSkipEvent) {
 			continue

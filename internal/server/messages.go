@@ -36,7 +36,6 @@ const timelineSelectBase = `
 	WHERE timeline.room_id = ?
 `
 
-const timelineSelectBefore = timelineSelectBase + ` AND (? = 0 OR timeline.rowid < ?) ORDER BY timeline.rowid DESC LIMIT ?`
 const timelineSelectAfter = timelineSelectBase + ` AND (? = 0 OR timeline.rowid > ?) ORDER BY timeline.rowid ASC LIMIT ?`
 
 var errSkipEvent = errors.New("skip event")
@@ -67,32 +66,57 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) error {
 		return errs.NotFound("Chat not found")
 	}
 
-	events, hasMore, err := s.loadTimelineEvents(r.Context(), room.ID, cursorValue, direction, messagePageSize+1)
-	if err != nil {
-		return err
-	}
-	if len(events) > messagePageSize {
-		events = events[:messagePageSize]
-	}
+	messages := make([]compat.Message, 0, messagePageSize+1)
+	var hasMore bool
+	nextCursor := cursorValue
+	const maxBatches = 12
 
 	memberNames := s.loadMemberNameMap(r.Context(), room.ID)
-	reactions, err := s.loadReactionMap(r.Context(), room.ID, events)
-	if err != nil {
-		return err
+	for batch := 0; batch < maxBatches && len(messages) < messagePageSize+1; batch++ {
+		batchLimit := messagePageSize + 1
+		if direction == "before" {
+			batchLimit = (messagePageSize + 1) * 3
+		}
+		events, batchHasMore, loadErr := s.loadTimelineEvents(r.Context(), room.ID, nextCursor, direction, batchLimit)
+		if loadErr != nil {
+			return loadErr
+		}
+		if len(events) == 0 {
+			hasMore = false
+			break
+		}
+		if err = s.populateLastEditRefs(r.Context(), events); err != nil {
+			return err
+		}
+		reactions, reactionErr := s.loadReactionMap(r.Context(), room.ID, events)
+		if reactionErr != nil {
+			return reactionErr
+		}
+
+		for _, evt := range events {
+			mapped, mapErr := s.mapEventToMessage(r.Context(), evt, room, lookup, reactionBundle{Names: memberNames, Reactions: reactions})
+			if errors.Is(mapErr, errSkipEvent) {
+				continue
+			}
+			if mapErr != nil {
+				continue
+			}
+			messages = append(messages, mapped)
+			if len(messages) > messagePageSize {
+				break
+			}
+		}
+		hasMore = batchHasMore
+		if direction != "before" || !batchHasMore {
+			break
+		}
+		nextCursor = int64(events[len(events)-1].TimelineRowID)
 	}
 
-	messages := make([]compat.Message, 0, len(events))
-	for _, evt := range events {
-		mapped, mapErr := s.mapEventToMessage(r.Context(), evt, room, lookup, reactionBundle{Names: memberNames, Reactions: reactions})
-		if errors.Is(mapErr, errSkipEvent) {
-			continue
-		}
-		if mapErr != nil {
-			continue
-		}
-		messages = append(messages, mapped)
+	if len(messages) > messagePageSize {
+		messages = messages[:messagePageSize]
+		hasMore = true
 	}
-
 	return writeJSON(w, compat.ListMessagesOutput{Items: messages, HasMore: hasMore})
 }
 
@@ -307,10 +331,14 @@ func (s *Server) removeReaction(w http.ResponseWriter, r *http.Request) error {
 
 func (s *Server) loadTimelineEvents(ctx context.Context, roomID id.RoomID, cursorValue int64, direction string, limit int) ([]*database.Event, bool, error) {
 	cli := s.rt.Client()
-	query := timelineSelectBefore
-	if direction == "after" {
-		query = timelineSelectAfter
+	if direction == "before" {
+		resp, err := cli.Paginate(ctx, roomID, database.TimelineRowID(cursorValue), limit, false)
+		if err != nil {
+			return nil, false, errs.Internal(fmt.Errorf("failed to paginate timeline: %w", err))
+		}
+		return resp.Events, resp.HasMore, nil
 	}
+	query := timelineSelectAfter
 	rows, err := cli.DB.Query(ctx, query, roomID, cursorValue, cursorValue, limit)
 	if err != nil {
 		return nil, false, errs.Internal(fmt.Errorf("failed to query timeline: %w", err))
@@ -330,12 +358,57 @@ func (s *Server) loadTimelineEvents(ctx context.Context, roomID id.RoomID, curso
 	}
 
 	hasMore := len(events) == limit
-	if direction == "after" {
-		sort.Slice(events, func(i, j int) bool {
-			return events[i].TimelineRowID > events[j].TimelineRowID
-		})
-	}
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].TimelineRowID > events[j].TimelineRowID
+	})
 	return events, hasMore, nil
+}
+
+func (s *Server) populateLastEditRefs(ctx context.Context, events []*database.Event) error {
+	cli := s.rt.Client()
+	if cli == nil || len(events) == 0 {
+		return nil
+	}
+
+	byEditRowID := make(map[database.EventRowID][]*database.Event)
+	editRowIDs := make([]database.EventRowID, 0)
+	for _, evt := range events {
+		if evt == nil || evt.LastEditRowID == nil {
+			continue
+		}
+		editRowID := *evt.LastEditRowID
+		if editRowID <= 0 || editRowID == evt.RowID {
+			continue
+		}
+		if _, ok := byEditRowID[editRowID]; !ok {
+			editRowIDs = append(editRowIDs, editRowID)
+		}
+		byEditRowID[editRowID] = append(byEditRowID[editRowID], evt)
+	}
+	if len(editRowIDs) == 0 {
+		return nil
+	}
+
+	editEvents, err := cli.DB.Event.GetByRowIDs(ctx, editRowIDs...)
+	if err != nil {
+		return errs.Internal(fmt.Errorf("failed to load edited message references: %w", err))
+	}
+	editByRowID := make(map[database.EventRowID]*database.Event, len(editEvents))
+	for _, evt := range editEvents {
+		if evt != nil {
+			editByRowID[evt.RowID] = evt
+		}
+	}
+	for editRowID, targets := range byEditRowID {
+		editEvt := editByRowID[editRowID]
+		if editEvt == nil || editEvt.RedactedBy != "" {
+			continue
+		}
+		for _, target := range targets {
+			target.LastEditRef = editEvt
+		}
+	}
+	return nil
 }
 
 type reactionBundle struct {

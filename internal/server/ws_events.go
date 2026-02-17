@@ -327,6 +327,9 @@ func (s *Server) hydrateMessagesForWSEvent(chatID string, messageIDs []string) (
 	if len(events) == 0 {
 		return nil, nil
 	}
+	if err = s.populateLastEditRefs(context.Background(), events); err != nil {
+		return nil, err
+	}
 
 	memberNames := s.loadMemberNameMap(context.Background(), roomID)
 	reactions, _ := s.loadReactionMap(context.Background(), roomID, events)
