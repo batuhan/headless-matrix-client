@@ -147,9 +147,28 @@ func (s *Server) initOAuthState(staticToken string) {
 	}
 }
 
-func (s *Server) validateBearerToken(token string) bool {
-	_, ok := s.oauthTokenByValue(token)
-	return ok
+func (s *Server) validateBearerToken(token string, requiredScopes []string) bool {
+	entry, ok := s.oauthTokenByValue(token)
+	if !ok {
+		return false
+	}
+	if len(requiredScopes) == 0 {
+		return true
+	}
+	scopeSet := make(map[string]struct{}, len(entry.Scopes))
+	for _, scope := range entry.Scopes {
+		scopeSet[strings.TrimSpace(scope)] = struct{}{}
+	}
+	for _, required := range requiredScopes {
+		required = strings.TrimSpace(required)
+		if required == "" {
+			continue
+		}
+		if _, hasScope := scopeSet[required]; !hasScope {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Server) oauthTokenByValue(token string) (oauthAccessToken, bool) {
