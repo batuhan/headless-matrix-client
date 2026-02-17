@@ -31,6 +31,10 @@ const (
 	unifiedChatSectionLimit    = 30
 	unifiedMessageSectionLimit = 20
 
+	searchMessagesScanBatchSize  = 500
+	searchMessagesScanMaxEvents  = 5000
+	searchMessagesScanMaxBatches = 20
+
 	contactSourceScoreCloudList    = 100
 	contactSourceScoreParticipants = 120
 	contactSourceScoreDirectory    = 200
@@ -1269,14 +1273,7 @@ func (s *Server) searchMessagesCore(ctx context.Context, params searchMessagesPa
 		roomByID[room.ID] = room
 	}
 
-	fetchLimit := params.Limit * 8
-	if fetchLimit < params.Limit+1 {
-		fetchLimit = params.Limit + 1
-	}
-	if fetchLimit > 1000 {
-		fetchLimit = 1000
-	}
-	events, dbHasMore, err := s.loadTimelineEventsGlobal(ctx, params.Cursor, params.Direction, fetchLimit)
+	events, dbHasMore, err := s.loadSearchMessageEvents(ctx, params)
 	if err != nil {
 		return compat.SearchMessagesOutput{}, err
 	}
@@ -1356,7 +1353,7 @@ func (s *Server) searchMessagesCore(ctx context.Context, params searchMessagesPa
 		if mapErr != nil {
 			continue
 		}
-		if !matchesAllTokens(params.Query, msg.Text) {
+		if !matchesMessageQuery(params.Query, msg) {
 			continue
 		}
 		if !matchesSender(msg, params.Sender) {
@@ -1412,6 +1409,51 @@ func (s *Server) searchMessagesCore(ctx context.Context, params searchMessagesPa
 		OldestCursor: oldestCursor,
 		NewestCursor: newestCursor,
 	}, nil
+}
+
+func (s *Server) loadSearchMessageEvents(ctx context.Context, params searchMessagesParams) ([]*database.Event, bool, error) {
+	// Most message searches go backwards in history; iterate over multiple timeline pages so sparse
+	// filters still find matches deeper in history.
+	if params.Direction != "before" {
+		fetchLimit := params.Limit * 8
+		if fetchLimit < params.Limit+1 {
+			fetchLimit = params.Limit + 1
+		}
+		if fetchLimit > 1000 {
+			fetchLimit = 1000
+		}
+		return s.loadTimelineEventsGlobal(ctx, params.Cursor, params.Direction, fetchLimit)
+	}
+
+	events := make([]*database.Event, 0, min(searchMessagesScanMaxEvents, searchMessagesScanBatchSize*2))
+	cursorValue := params.Cursor
+	hasMore := false
+	for batch := 0; batch < searchMessagesScanMaxBatches && len(events) < searchMessagesScanMaxEvents; batch++ {
+		remaining := searchMessagesScanMaxEvents - len(events)
+		limit := searchMessagesScanBatchSize
+		if remaining < limit {
+			limit = remaining
+		}
+		if limit <= 0 {
+			break
+		}
+
+		page, pageHasMore, err := s.loadTimelineEventsGlobal(ctx, cursorValue, "before", limit)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(page) == 0 {
+			hasMore = false
+			break
+		}
+		events = append(events, page...)
+		hasMore = pageHasMore
+		if !pageHasMore {
+			break
+		}
+		cursorValue = int64(page[len(page)-1].TimelineRowID)
+	}
+	return events, hasMore, nil
 }
 
 func (s *Server) loadTimelineEventsGlobal(ctx context.Context, cursorValue int64, direction string, limit int) ([]*database.Event, bool, error) {
@@ -1670,6 +1712,73 @@ func matchesAllTokens(query, text string) bool {
 		}
 	}
 	return true
+}
+
+func matchesMessageQuery(query string, msg compat.Message) bool {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		return true
+	}
+	tokens := strings.Fields(strings.ToLower(query))
+	if len(tokens) == 0 {
+		return true
+	}
+
+	baseText := strings.ToLower(msg.Text)
+	looseText := normalizeLooseSearch(baseText)
+	compactText := strings.ReplaceAll(looseText, " ", "")
+	trimmedColons := strings.Trim(msg.Text, ":")
+	looseTrimmedColons := normalizeLooseSearch(trimmedColons)
+
+	haystacks := []string{
+		baseText,
+		looseText,
+		compactText,
+	}
+	if msg.Type == compat.MessageType("REACTION") && strings.TrimSpace(trimmedColons) != "" {
+		haystacks = append(haystacks, strings.ToLower(trimmedColons), looseTrimmedColons, strings.ReplaceAll(looseTrimmedColons, " ", ""))
+	}
+
+	for _, token := range tokens {
+		looseToken := normalizeLooseSearch(token)
+		compactToken := strings.ReplaceAll(looseToken, " ", "")
+		matched := false
+		for _, haystack := range haystacks {
+			if haystack == "" {
+				continue
+			}
+			if strings.Contains(haystack, token) {
+				matched = true
+				break
+			}
+			if looseToken != "" && strings.Contains(haystack, looseToken) {
+				matched = true
+				break
+			}
+			if compactToken != "" && strings.Contains(strings.ReplaceAll(haystack, " ", ""), compactToken) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizeLooseSearch(input string) string {
+	var builder strings.Builder
+	builder.Grow(len(input))
+	for _, r := range strings.ToLower(input) {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			builder.WriteRune(r)
+		case r == '_', r == '-', r == ':', r == '/', r == '.', r == ' ':
+			builder.WriteByte(' ')
+		}
+	}
+	return strings.Join(strings.Fields(builder.String()), " ")
 }
 
 func matchesSender(msg compat.Message, sender string) bool {

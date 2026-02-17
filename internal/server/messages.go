@@ -14,6 +14,7 @@ import (
 	"unicode/utf8"
 
 	"go.mau.fi/gomuks/pkg/hicli/database"
+	"go.mau.fi/util/emojirunes"
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
@@ -470,16 +471,17 @@ func (s *Server) loadReactionMap(ctx context.Context, roomID id.RoomID, events [
 			if key == "" {
 				continue
 			}
-			reactionID := string(reactionEvt.Sender) + ":" + key
-			if _, ok := seen[reactionID]; ok {
+			dedupeKey := string(reactionEvt.Sender) + "\x1f" + key
+			if _, ok := seen[dedupeKey]; ok {
 				continue
 			}
-			seen[reactionID] = struct{}{}
+			seen[dedupeKey] = struct{}{}
+			reactionID := string(reactionEvt.Sender) + key
 			reactions = append(reactions, compat.Reaction{
 				ID:            reactionID,
 				ReactionKey:   key,
 				ParticipantID: string(reactionEvt.Sender),
-				Emoji:         utf8.RuneCountInString(key) <= 2,
+				Emoji:         utf8.RuneCountInString(key) <= 100 && emojirunes.IsOnlyEmojis(key),
 			})
 		}
 		if len(reactions) > 0 {
