@@ -105,6 +105,7 @@ func (s *Server) Handler() http.Handler {
 	s.handle(mux, "POST /v1/assets/upload/base64", s.uploadAsset, false, "write")
 
 	s.handle(mux, "GET /v1/accounts/{accountID}/contacts", s.searchContacts, false, "read")
+	s.handle(mux, "GET /v0/search-users", s.searchUsersV0, false, "read")
 	s.handle(mux, "GET /v1/accounts/{accountID}/contacts/list", s.listContacts, false, "read")
 	s.handle(mux, "GET /v1/search", s.search, false, "read")
 	s.handle(mux, "GET /v0/search", s.search, false, "read")

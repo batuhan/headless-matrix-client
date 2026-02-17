@@ -155,6 +155,54 @@ func (s *Server) searchContacts(w http.ResponseWriter, r *http.Request) error {
 	return writeJSON(w, compat.SearchContactsOutput{Items: items})
 }
 
+func (s *Server) searchUsersV0(w http.ResponseWriter, r *http.Request) error {
+	accountID := strings.TrimSpace(r.URL.Query().Get("accountID"))
+	if accountID == "" {
+		accountID = strings.TrimSpace(r.URL.Query().Get("desktopAccountID"))
+	}
+	if accountID == "" {
+		return errs.Validation(map[string]any{"accountID": "accountID is required"})
+	}
+	query := strings.TrimSpace(r.URL.Query().Get("query"))
+	if query == "" {
+		return errs.Validation(map[string]any{"query": "query is required"})
+	}
+
+	lookup, err := s.buildAccountLookup(r.Context())
+	if err != nil {
+		return err
+	}
+	if _, ok := lookup.ByID[accountID]; !ok {
+		return errs.NotFound("Account not found")
+	}
+
+	resp, err := s.rt.Client().Client.SearchUserDirectory(r.Context(), query, 50)
+	if err != nil {
+		return errs.Internal(fmt.Errorf("failed to search user directory: %w", err))
+	}
+
+	items := make([]compat.User, 0, len(resp.Results))
+	for _, user := range resp.Results {
+		if user == nil {
+			continue
+		}
+		fullName := strings.TrimSpace(user.DisplayName)
+		if fullName == "" {
+			fullName = user.UserID.String()
+		}
+		username := strings.TrimPrefix(strings.SplitN(user.UserID.String(), ":", 2)[0], "@")
+		items = append(items, compat.User{
+			ID:            user.UserID.String(),
+			Username:      username,
+			FullName:      fullName,
+			ImgURL:        user.AvatarURL.String(),
+			CannotMessage: false,
+			IsSelf:        user.UserID == s.rt.Client().Account.UserID,
+		})
+	}
+	return writeJSON(w, compat.SearchContactsOutput{Items: items})
+}
+
 func (s *Server) listContacts(w http.ResponseWriter, r *http.Request) error {
 	accountID := strings.TrimSpace(r.PathValue("accountID"))
 	if accountID == "" {
