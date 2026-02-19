@@ -1,7 +1,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -33,9 +32,6 @@ func Load() (Config, error) {
 		stateDir = filepath.Join(home, ".local", "share", "gomuks-beeper-api")
 	}
 	cfg.StateDir = stateDir
-	if cfg.AccessToken == "" {
-		return Config{}, errors.New("BEEPER_ACCESS_TOKEN is required")
-	}
 	return cfg, nil
 }
 

@@ -19,12 +19,12 @@ HTTP API server that implements a Beeper Desktop API-compatible surface on top o
 ## Run
 
 ```bash
-BEEPER_ACCESS_TOKEN=your_token go run ./cmd/server
+go run ./cmd/server
 ```
 
 ## Environment
 
-- `BEEPER_ACCESS_TOKEN` (required): static bearer token
+- `BEEPER_ACCESS_TOKEN` (optional): static bearer token for legacy direct Bearer auth
 - `BEEPER_API_LISTEN` (optional): listen address (default `127.0.0.1:23373`)
 - `BEEPER_STATE_DIR` (optional): runtime state root (default `~/.local/share/gomuks-beeper-api`)
 - `BEEPER_ALLOW_QUERY_TOKEN` (optional): set `true` to allow `dangerouslyUseTokenInQuery` for `/v1/assets/serve`
@@ -39,7 +39,7 @@ Flow:
 
 1. Start the server:
 ```bash
-BEEPER_ACCESS_TOKEN=your_token go run ./cmd/server
+go run ./cmd/server
 ```
 2. Open `/manage`.
 3. Log in:

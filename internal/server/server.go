@@ -45,7 +45,9 @@ func New(cfg config.Config, rt *gomuksruntime.Runtime) *Server {
 		oauthSubject: "local-user",
 		oauthState:   filepath.Join(rt.StateDir(), "oauth", "state.json"),
 	}
-	s.initOAuthState(cfg.AccessToken)
+	if strings.TrimSpace(cfg.AccessToken) != "" {
+		s.initOAuthState(cfg.AccessToken)
+	}
 	if err := s.loadOAuthState(); err != nil {
 		log.Printf("failed to load oauth state: %v", err)
 	}
