@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Beeper Desktop API Playground</title>
+  <style>
+    :root { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+    body { margin: 0; background: #f4f6f8; color: #111827; }
+    .wrap { max-width: 1000px; margin: 20px auto; padding: 0 16px; }
+    .card { background: #fff; border: 1px solid #d1d5db; border-radius: 10px; padding: 14px; margin-bottom: 12px; }
+    h1 { font-size: 22px; margin: 0 0 10px; }
+    h2 { font-size: 16px; margin: 0 0 10px; }
+    label { display: block; font-size: 12px; margin: 8px 0 4px; color: #374151; }
+    input, textarea, select, button {
+      font: inherit; border: 1px solid #c7cdd4; border-radius: 8px; padding: 8px 10px; width: 100%; box-sizing: border-box;
+    }
+    textarea { min-height: 92px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .grid { display: grid; gap: 10px; }
+    .grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; }
+    .row > button { width: auto; }
+    button { background: #111827; color: #fff; border-color: #111827; cursor: pointer; }
+    button.secondary { background: #fff; color: #111827; }
+    pre { margin: 0; background: #0b1020; color: #d2defe; padding: 12px; border-radius: 8px; overflow: auto; max-height: 48vh; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>Beeper Desktop API Playground</h1>
+      <div class="grid cols-2">
+        <div>
+          <label for="baseURL">Base URL</label>
+          <input id="baseURL" value="http://127.0.0.1:23373" />
+        </div>
+        <div>
+          <label for="accessToken">Access Token (optional with OAuth token)</label>
+          <input id="accessToken" placeholder="paste token if needed" />
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Quick Actions</h2>
+      <div class="row">
+        <button data-op="info">GET /v1/info</button>
+        <button data-op="accounts">List Accounts</button>
+        <button data-op="chats_list">List Chats</button>
+        <button data-op="chats_search">Search Chats</button>
+        <button data-op="messages_search">Search Messages</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Custom Request Body</h2>
+      <label for="payload">POST /api/run payload</label>
+      <textarea id="payload">{
+  "operation": "chats_search",
+  "params": {
+    "query": "test",
+    "limit": 10
+  }
+}</textarea>
+      <div class="row">
+        <button id="runCustom">Run</button>
+        <button id="format" class="secondary">Format JSON</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Response</h2>
+      <pre id="out">Ready.</pre>
+    </div>
+  </div>
+
+  <script>
+    const out = document.getElementById("out");
+    const payloadEl = document.getElementById("payload");
+    const baseURLEl = document.getElementById("baseURL");
+    const accessTokenEl = document.getElementById("accessToken");
+
+    const presets = {
+      info: { operation: "info" },
+      accounts: { operation: "accounts" },
+      chats_list: { operation: "chats_list", params: { limit: 25 } },
+      chats_search: { operation: "chats_search", params: { query: "hello", limit: 10 } },
+      messages_search: { operation: "messages_search", params: { query: "hello", limit: 10 } },
+    };
+
+    function pretty(v) {
+      return JSON.stringify(v, null, 2);
+    }
+
+    async function run(payload) {
+      const req = {
+        ...payload,
+        baseURL: baseURLEl.value.trim(),
+        accessToken: accessTokenEl.value.trim(),
+      };
+      out.textContent = "Loading...";
+      const res = await fetch("/api/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(req),
+      });
+      const json = await res.json().catch(() => ({ error: "invalid JSON response" }));
+      out.textContent = pretty(json);
+    }
+
+    document.querySelectorAll("button[data-op]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const op = btn.getAttribute("data-op");
+        const payload = presets[op];
+        payloadEl.value = pretty(payload);
+        run(payload).catch((e) => {
+          out.textContent = String(e);
+        });
+      });
+    });
+
+    document.getElementById("runCustom").addEventListener("click", () => {
+      try {
+        run(JSON.parse(payloadEl.value)).catch((e) => {
+          out.textContent = String(e);
+        });
+      } catch (e) {
+        out.textContent = "Invalid JSON payload.";
+      }
+    });
+
+    document.getElementById("format").addEventListener("click", () => {
+      try {
+        payloadEl.value = pretty(JSON.parse(payloadEl.value));
+      } catch (_) {}
+    });
+  </script>
+</body>
+</html>

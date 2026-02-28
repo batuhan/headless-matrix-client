@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	errs "github.com/batuhan/gomuks-beeper-api/internal/errors"
+	errs "github.com/batuhan/easymatrix/internal/errors"
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
 )
@@ -78,7 +78,7 @@ func (s *Server) info(w http.ResponseWriter, r *http.Request) error {
 	}
 	response := map[string]any{
 		"app": map[string]any{
-			"name":      "gomuks-beeper-api",
+			"name":      "EasyMatrix",
 			"version":   appVersion,
 			"bundle_id": "com.beeper.desktop",
 		},
@@ -134,7 +134,7 @@ func (s *Server) oauthProtectedResourceMetadata(w http.ResponseWriter, r *http.R
 		AuthorizationServers:              []string{baseURL},
 		BearerMethodsSupported:            []string{"header", "query"},
 		ScopesSupported:                   []string{"read", "write"},
-		ResourceName:                      "gomuks-beeper-api",
+		ResourceName:                      "EasyMatrix",
 		ResourceDocumentation:             baseURL + "/v1/spec",
 		ResourcePolicyURI:                 baseURL + "/v1/spec",
 		ResourceSigningAlgValuesSupported: []string{},
@@ -464,7 +464,7 @@ func (s *Server) oauthIntrospect(w http.ResponseWriter, r *http.Request) error {
 		"iss":        s.requestBaseURL(r),
 		"app": map[string]any{
 			"version":   appVersion,
-			"name":      "gomuks-beeper-api",
+			"name":      "EasyMatrix",
 			"bundle_id": "com.beeper.desktop",
 		},
 		"client": map[string]any{

@@ -1,6 +1,18 @@
-# gomuks-beeper-api
+# EasyMatrix
 
-HTTP API server that implements a Beeper Desktop API-compatible surface on top of `gomuks`.
+EasyMatrix is a Beeper Desktop API-compatible headless Matrix client built on `gomuks`. It can be used with Desktop API JS SDK and even comes with an adapter that embeds the entire client (via N-API).
+
+## JS Adapter
+
+Adapter package: `@bi/easymatrix`
+
+```bash
+npx @bi/easymatrix
+```
+
+```ts
+import { desktopAPIFetch, run } from "@bi/easymatrix";
+```
 
 ## What it does
 
@@ -24,14 +36,18 @@ go run ./cmd/server
 
 ## Environment
 
+- `.env` in the current working directory is loaded automatically (if present)
 - `BEEPER_ACCESS_TOKEN` (optional): static bearer token for legacy direct Bearer auth
 - `BEEPER_API_LISTEN` (optional): listen address (default `127.0.0.1:23373`)
-- `BEEPER_STATE_DIR` (optional): runtime state root (default `~/.local/share/gomuks-beeper-api`)
+- `BEEPER_STATE_DIR` (optional): runtime state root (default `~/.local/share/easymatrix`)
 - `BEEPER_ALLOW_QUERY_TOKEN` (optional): set `true` to allow `dangerouslyUseTokenInQuery` for `/v1/assets/serve`
+- `BEEPER_HOMESERVER_URL` (optional): homeserver for password login bootstrap (default `https://matrix.beeper.com`)
+- `BEEPER_USERNAME` + `BEEPER_PASSWORD` (optional, must be set together): run password login automatically on startup
+- `BEEPER_RECOVERY_KEY` (optional): run verification automatically on startup
 
 ## Login (Beeper Session)
 
-`gomuks-beeper-api` now includes a built-in setup UI at:
+`EasyMatrix` now includes a built-in setup UI at:
 
 - `http://127.0.0.1:23373/manage` (or your configured listen address)
 
@@ -49,6 +65,8 @@ go run ./cmd/server
 5. Confirm `is_logged_in=true` and `is_verified=true` in Client State.
 
 If no valid Beeper session exists, protected API calls return `403`.
+
+If you set `BEEPER_USERNAME`, `BEEPER_PASSWORD`, and `BEEPER_RECOVERY_KEY`, startup will automatically login and verify without opening `/manage`.
 
 ## Auth Modes
 

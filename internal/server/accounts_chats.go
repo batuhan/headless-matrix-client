@@ -13,9 +13,9 @@ import (
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
-	"github.com/batuhan/gomuks-beeper-api/internal/compat"
-	"github.com/batuhan/gomuks-beeper-api/internal/cursor"
-	errs "github.com/batuhan/gomuks-beeper-api/internal/errors"
+	"github.com/batuhan/easymatrix/internal/compat"
+	"github.com/batuhan/easymatrix/internal/cursor"
+	errs "github.com/batuhan/easymatrix/internal/errors"
 )
 
 const (

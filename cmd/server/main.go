@@ -10,9 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/batuhan/gomuks-beeper-api/internal/config"
-	"github.com/batuhan/gomuks-beeper-api/internal/gomuksruntime"
-	"github.com/batuhan/gomuks-beeper-api/internal/server"
+	"github.com/batuhan/easymatrix/internal/config"
+	"github.com/batuhan/easymatrix/internal/gomuksruntime"
+	"github.com/batuhan/easymatrix/internal/server"
 )
 
 func main() {
@@ -37,7 +37,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("gomuks-beeper-api listening on http://%s", cfg.ListenAddr)
+		log.Printf("EasyMatrix listening on http://%s", cfg.ListenAddr)
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("http server failed: %v", err)
 		}

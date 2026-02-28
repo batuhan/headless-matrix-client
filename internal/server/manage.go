@@ -14,7 +14,7 @@ import (
 	"maunium.net/go/mautrix"
 	"maunium.net/go/mautrix/id"
 
-	errs "github.com/batuhan/gomuks-beeper-api/internal/errors"
+	errs "github.com/batuhan/easymatrix/internal/errors"
 )
 
 const beeperPrivateAPIAuthHeader = "Bearer BEEPER-PRIVATE-API-PLEASE-DONT-USE"
@@ -434,7 +434,7 @@ const manageHTML = `<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>gomuks-beeper-api Setup</title>
+  <title>EasyMatrix Setup</title>
   <style>
     :root {
       --bg: #f5f7fa;
@@ -540,7 +540,7 @@ const manageHTML = `<!doctype html>
 <body>
   <div class="wrap">
     <div class="card">
-      <h1>gomuks-beeper-api Setup</h1>
+      <h1>EasyMatrix Setup</h1>
       <div class="muted">Login and verify without launching full gomuks UI.</div>
     </div>
 

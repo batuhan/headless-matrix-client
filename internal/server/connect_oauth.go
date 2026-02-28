@@ -138,14 +138,14 @@ func (s *Server) initOAuthState(staticToken string) {
 	s.oauthTokens[staticToken] = oauthAccessToken{
 		Value:      staticToken,
 		TokenType:  oauthTokenTypeBearer,
-		ClientID:   "gomuks-beeper-api-static",
+		ClientID:   "easymatrix-static",
 		Subject:    s.oauthSubject,
 		Scopes:     []string{"read", "write"},
 		CreatedAt:  now,
 		ExpiresAt:  nil,
 		RevokedAt:  nil,
 		Static:     true,
-		ClientName: "gomuks-beeper-api",
+		ClientName: "EasyMatrix",
 	}
 }
 

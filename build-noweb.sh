@@ -2,4 +2,4 @@
 set -euo pipefail
 
 mkdir -p bin
-go build -o bin/gomuks-beeper-api ./cmd/server
+go build -o bin/easymatrix ./cmd/server

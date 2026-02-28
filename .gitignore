@@ -1,9 +1,12 @@
 # Build
 bin/
+dist/
+node_modules/
 *.test
 
 # Local runtime state
 state/
+.env
 
 # IDE
 .DS_Store

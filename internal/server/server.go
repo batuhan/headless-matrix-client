@@ -10,11 +10,11 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/batuhan/gomuks-beeper-api/internal/auth"
-	"github.com/batuhan/gomuks-beeper-api/internal/config"
-	"github.com/batuhan/gomuks-beeper-api/internal/cursor"
-	errs "github.com/batuhan/gomuks-beeper-api/internal/errors"
-	"github.com/batuhan/gomuks-beeper-api/internal/gomuksruntime"
+	"github.com/batuhan/easymatrix/internal/auth"
+	"github.com/batuhan/easymatrix/internal/config"
+	"github.com/batuhan/easymatrix/internal/cursor"
+	errs "github.com/batuhan/easymatrix/internal/errors"
+	"github.com/batuhan/easymatrix/internal/gomuksruntime"
 )
 
 type Server struct {

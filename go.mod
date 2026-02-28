@@ -1,11 +1,14 @@
-module github.com/batuhan/gomuks-beeper-api
+module github.com/batuhan/easymatrix
 
 go 1.24.0
 
 require (
 	github.com/beeper/desktop-api-go v0.3.0
 	github.com/coder/websocket v1.8.14
+	github.com/joho/godotenv v1.5.1
+	github.com/modelcontextprotocol/go-sdk v1.3.0
 	go.mau.fi/gomuks v0.2601.0
+	go.mau.fi/util v0.9.6-0.20260124144959-47fbccd7a8f4
 	maunium.net/go/mautrix v0.26.3-0.20260128193407-2423716f8394
 )
 
@@ -23,7 +26,6 @@ require (
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mattn/go-sqlite3 v1.14.33 // indirect
-	github.com/modelcontextprotocol/go-sdk v1.3.0 // indirect
 	github.com/petermattis/goid v0.0.0-20260113132338-7c7de50cc741 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rs/xid v1.6.0 // indirect
@@ -34,13 +36,13 @@ require (
 	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/yuin/goldmark v1.7.16 // indirect
 	go.mau.fi/goheif v0.0.0-20251226222328-02af05634b82 // indirect
-	go.mau.fi/util v0.9.6-0.20260124144959-47fbccd7a8f4 // indirect
 	go.mau.fi/webp v0.2.0 // indirect
 	go.mau.fi/zeroconfig v0.2.0 // indirect
 	golang.org/x/crypto v0.47.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/image v0.35.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
+	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1 // indirect

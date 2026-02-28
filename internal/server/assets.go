@@ -23,8 +23,8 @@ import (
 
 	"maunium.net/go/mautrix/id"
 
-	"github.com/batuhan/gomuks-beeper-api/internal/compat"
-	errs "github.com/batuhan/gomuks-beeper-api/internal/errors"
+	"github.com/batuhan/easymatrix/internal/compat"
+	errs "github.com/batuhan/easymatrix/internal/errors"
 )
 
 const maxUploadSizeBytes = int64(500 * 1024 * 1024)
