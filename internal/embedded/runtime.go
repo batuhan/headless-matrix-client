@@ -38,6 +38,7 @@ type Config struct {
 	StateDir            string `json:"stateDir,omitempty"`
 	AllowQueryTokenAuth bool   `json:"allowQueryTokenAuth,omitempty"`
 	BeeperHomeserverURL string `json:"beeperHomeserverUrl,omitempty"`
+	BeeperLoginToken    string `json:"beeperLoginToken,omitempty"`
 	BeeperUsername      string `json:"beeperUsername,omitempty"`
 	BeeperPassword      string `json:"beeperPassword,omitempty"`
 	BeeperRecoveryKey   string `json:"beeperRecoveryKey,omitempty"`
@@ -180,6 +181,9 @@ func normalizeConfig(input Config) (config.Config, error) {
 	cfg.AllowQueryTokenAuth = input.AllowQueryTokenAuth
 	if strings.TrimSpace(input.BeeperHomeserverURL) != "" {
 		cfg.BeeperHomeserverURL = input.BeeperHomeserverURL
+	}
+	if strings.TrimSpace(input.BeeperLoginToken) != "" {
+		cfg.BeeperLoginToken = input.BeeperLoginToken
 	}
 	if strings.TrimSpace(input.BeeperUsername) != "" {
 		cfg.BeeperUsername = input.BeeperUsername

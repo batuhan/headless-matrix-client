@@ -71,6 +71,41 @@ If you set `BEEPER_LOGIN_TOKEN` or `BEEPER_USERNAME`/`BEEPER_PASSWORD`, plus `BE
 
 `/manage` only supports recovery-key/passphrase verification today. Emoji / SAS confirmation is not exposed by gomuks' JSON command API yet.
 
+## Embedded Bun Runtime
+
+The embedded runtime is Bun-only and follows the same long-lived native runtime pattern gomuks uses for its JS-facing environments: start one native client, then talk to it through a narrow request/event bridge.
+
+Current embedded options support the same startup auth inputs as server mode:
+
+- `beeperHomeserverURL`
+- `beeperLoginToken`
+- `beeperUsername` / `beeperPassword`
+- `beeperRecoveryKey`
+
+Example:
+
+```ts
+import { BeeperDesktop, withEmbedded } from "@bi/easymatrix";
+
+const embedded = await withEmbedded(BeeperDesktop, {
+  runtime: {
+    accessToken: "local-dev-token",
+    stateDir: "/tmp/easymatrix-bun",
+    beeperHomeserverURL: "https://matrix.beeper-staging.com",
+    beeperLoginToken: process.env.BEEPER_LOGIN_TOKEN,
+    beeperRecoveryKey: process.env.BEEPER_RECOVERY_KEY,
+  },
+});
+
+const accounts = await embedded.sdk.accounts.list();
+```
+
+The native library must still be built first:
+
+```bash
+npm run build
+```
+
 ## CLI Login
 
 You can drive the same `/manage` flows from the terminal:

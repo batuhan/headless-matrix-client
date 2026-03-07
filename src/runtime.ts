@@ -10,6 +10,7 @@ export interface EmbeddedRuntimeOptions {
   stateDir?: string;
   allowQueryTokenAuth?: boolean;
   beeperHomeserverURL?: string;
+  beeperLoginToken?: string;
   beeperUsername?: string;
   beeperPassword?: string;
   beeperRecoveryKey?: string;
@@ -35,6 +36,7 @@ interface RuntimeConfigPayload {
   stateDir?: string;
   allowQueryTokenAuth?: boolean;
   beeperHomeserverUrl?: string;
+  beeperLoginToken?: string;
   beeperUsername?: string;
   beeperPassword?: string;
   beeperRecoveryKey?: string;
@@ -261,6 +263,7 @@ export class EmbeddedRuntime {
       stateDir: this.options.stateDir,
       allowQueryTokenAuth: this.options.allowQueryTokenAuth,
       beeperHomeserverUrl: this.options.beeperHomeserverURL,
+      beeperLoginToken: this.options.beeperLoginToken,
       beeperUsername: this.options.beeperUsername,
       beeperPassword: this.options.beeperPassword,
       beeperRecoveryKey: this.options.beeperRecoveryKey,
