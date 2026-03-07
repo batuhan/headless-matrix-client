@@ -104,11 +104,13 @@ func (r *Runtime) Start(ctx context.Context) error {
 	if err := startClientWithoutExit(gmx); err != nil {
 		return err
 	}
+	r.gmx = gmx
 	if err := r.bootstrapSessionFromEnv(ctx, gmx); err != nil {
+		r.gmx = nil
+		gmx.DirectStop()
 		return err
 	}
 	gmx.Log.Info().Str("state_dir", r.cfg.StateDir).Msg("gomuks runtime started")
-	r.gmx = gmx
 	return nil
 }
 
