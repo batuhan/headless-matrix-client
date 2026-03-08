@@ -153,7 +153,12 @@ func newWSHub(server *Server) *wsHub {
 
 func (h *wsHub) ensureSubscription() error {
 	h.subscribeOnce.Do(func() {
-		unsub, err := h.server.rt.SubscribeBufferedEvents(func(evt *gomuks.BufferedEvent) {
+		buffer := h.server.rt.EventBuffer()
+		if buffer == nil {
+			h.subscribeErr = errors.New("gomuks runtime is not started")
+			return
+		}
+		listenerID, _ := buffer.Subscribe(0, nil, func(evt *gomuks.BufferedEvent) {
 			if evt == nil {
 				return
 			}
@@ -163,11 +168,11 @@ func (h *wsHub) ensureSubscription() error {
 				// Drop overflowing events to avoid blocking gomuks sync pipeline.
 			}
 		})
-		if err != nil {
-			h.subscribeErr = err
-			return
+		h.unsubscribe = func() {
+			if currentBuffer := h.server.rt.EventBuffer(); currentBuffer != nil {
+				currentBuffer.Unsubscribe(listenerID)
+			}
 		}
-		h.unsubscribe = unsub
 		go h.run()
 	})
 	return h.subscribeErr

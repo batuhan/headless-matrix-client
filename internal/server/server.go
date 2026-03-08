@@ -61,18 +61,18 @@ func (s *Server) Handler() http.Handler {
 
 	mux.Handle("GET /v1/spec", s.public(s.openAPISpec))
 	mux.Handle("GET /v1/info", s.public(s.info))
-	mux.Handle("GET /manage", s.public(s.manageUI))
-	mux.Handle("GET /manage/", s.public(s.manageUI))
-	mux.Handle("GET /manage/state", s.public(s.manageState))
-	mux.Handle("POST /manage/discover-homeserver", s.public(s.manageDiscoverHomeserver))
-	mux.Handle("POST /manage/login-flows", s.public(s.manageLoginFlows))
-	mux.Handle("POST /manage/login-password", s.public(s.manageLoginPassword))
-	mux.Handle("POST /manage/login-token", s.public(s.manageLoginToken))
-	mux.Handle("POST /manage/login-custom", s.public(s.manageLoginCustom))
-	mux.Handle("POST /manage/verify", s.public(s.manageVerify))
-	mux.Handle("POST /manage/beeper/start-login", s.public(s.manageBeeperStartLogin))
-	mux.Handle("POST /manage/beeper/request-code", s.public(s.manageBeeperRequestCode))
-	mux.Handle("POST /manage/beeper/submit-code", s.public(s.manageBeeperSubmitCode))
+	mux.Handle("GET /manage", s.manage(s.manageUI))
+	mux.Handle("GET /manage/", s.manage(s.manageUI))
+	mux.Handle("GET /manage/state", s.manage(s.manageState))
+	mux.Handle("POST /manage/discover-homeserver", s.manage(s.manageDiscoverHomeserver))
+	mux.Handle("POST /manage/login-flows", s.manage(s.manageLoginFlows))
+	mux.Handle("POST /manage/login-password", s.manage(s.manageLoginPassword))
+	mux.Handle("POST /manage/login-token", s.manage(s.manageLoginToken))
+	mux.Handle("POST /manage/login-custom", s.manage(s.manageLoginCustom))
+	mux.Handle("POST /manage/verify", s.manage(s.manageVerify))
+	mux.Handle("POST /manage/beeper/start-login", s.manage(s.manageBeeperStartLogin))
+	mux.Handle("POST /manage/beeper/request-code", s.manage(s.manageBeeperRequestCode))
+	mux.Handle("POST /manage/beeper/submit-code", s.manage(s.manageBeeperSubmitCode))
 	mux.Handle("GET /.well-known/oauth-protected-resource", s.public(s.oauthProtectedResourceMetadata))
 	mux.Handle("GET /.well-known/oauth-protected-resource/", s.public(s.oauthProtectedResourceMetadata))
 	mux.Handle("GET /.well-known/oauth-authorization-server", s.public(s.oauthAuthorizationServerMetadata))
@@ -140,6 +140,22 @@ func (s *Server) wrap(handler apiHandler) http.Handler {
 
 func (s *Server) public(handler apiHandler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := handler(w, r); err != nil {
+			errs.Write(w, err)
+		}
+	})
+}
+
+func (s *Server) manage(handler apiHandler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handled, err := s.authorizeManageRequest(w, r)
+		if err != nil {
+			errs.Write(w, err)
+			return
+		}
+		if handled {
+			return
+		}
 		if err := handler(w, r); err != nil {
 			errs.Write(w, err)
 		}

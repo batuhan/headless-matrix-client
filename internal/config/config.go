@@ -4,7 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/joho/godotenv"
@@ -15,16 +17,17 @@ type Config struct {
 	AccessToken         string
 	StateDir            string
 	AllowQueryTokenAuth bool
-	BeeperHomeserverURL string
-	BeeperLoginToken    string
-	BeeperUsername      string
-	BeeperPassword      string
-	BeeperRecoveryKey   string
+	ManageSecret        string
+	MatrixHomeserverURL string
+	MatrixLoginToken    string
+	MatrixUsername      string
+	MatrixPassword      string
+	MatrixRecoveryKey   string
 }
 
 const (
 	defaultListenAddr          = "127.0.0.1:23373"
-	defaultBeeperHomeserverURL = "https://matrix.beeper.com"
+	defaultMatrixHomeserverURL = "https://matrix.beeper.com"
 )
 
 func Load() (Config, error) {
@@ -33,22 +36,23 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		ListenAddr:          getenvDefault("BEEPER_API_LISTEN", defaultListenAddr),
-		AccessToken:         os.Getenv("BEEPER_ACCESS_TOKEN"),
-		AllowQueryTokenAuth: os.Getenv("BEEPER_ALLOW_QUERY_TOKEN") == "true",
-		BeeperHomeserverURL: getenvDefault("BEEPER_HOMESERVER_URL", defaultBeeperHomeserverURL),
-		BeeperLoginToken:    os.Getenv("BEEPER_LOGIN_TOKEN"),
-		BeeperUsername:      os.Getenv("BEEPER_USERNAME"),
-		BeeperPassword:      os.Getenv("BEEPER_PASSWORD"),
-		BeeperRecoveryKey:   os.Getenv("BEEPER_RECOVERY_KEY"),
+		ListenAddr:          resolveListenAddr(),
+		AccessToken:         os.Getenv("MATRIX_ACCESS_TOKEN"),
+		AllowQueryTokenAuth: os.Getenv("MATRIX_ALLOW_QUERY_TOKEN") == "true",
+		ManageSecret:        strings.TrimSpace(os.Getenv("EASYMATRIX_MANAGE_SECRET")),
+		MatrixHomeserverURL: getenvDefault("MATRIX_HOMESERVER_URL", defaultMatrixHomeserverURL),
+		MatrixLoginToken:    os.Getenv("MATRIX_LOGIN_TOKEN"),
+		MatrixUsername:      os.Getenv("MATRIX_USERNAME"),
+		MatrixPassword:      os.Getenv("MATRIX_PASSWORD"),
+		MatrixRecoveryKey:   os.Getenv("MATRIX_RECOVERY_KEY"),
 	}
-	if (cfg.BeeperUsername == "") != (cfg.BeeperPassword == "") {
-		return Config{}, fmt.Errorf("BEEPER_USERNAME and BEEPER_PASSWORD must be provided together")
+	if (cfg.MatrixUsername == "") != (cfg.MatrixPassword == "") {
+		return Config{}, fmt.Errorf("MATRIX_USERNAME and MATRIX_PASSWORD must be provided together")
 	}
-	if cfg.BeeperLoginToken != "" && cfg.BeeperUsername != "" {
-		return Config{}, fmt.Errorf("BEEPER_LOGIN_TOKEN cannot be combined with BEEPER_USERNAME/BEEPER_PASSWORD")
+	if cfg.MatrixLoginToken != "" && cfg.MatrixUsername != "" {
+		return Config{}, fmt.Errorf("MATRIX_LOGIN_TOKEN cannot be combined with MATRIX_USERNAME/MATRIX_PASSWORD")
 	}
-	cfg.StateDir = strings.TrimSpace(os.Getenv("GOMUKS_ROOT"))
+	cfg.StateDir = resolveStateDir()
 	return cfg, nil
 }
 
@@ -65,4 +69,27 @@ func loadDotEnv() error {
 		return nil
 	}
 	return fmt.Errorf("failed to load .env file: %w", err)
+}
+
+func resolveListenAddr() string {
+	if listenAddr := strings.TrimSpace(os.Getenv("MATRIX_API_LISTEN")); listenAddr != "" {
+		return listenAddr
+	}
+	if port := strings.TrimSpace(os.Getenv("PORT")); port != "" {
+		return net.JoinHostPort("0.0.0.0", port)
+	}
+	return defaultListenAddr
+}
+
+func resolveStateDir() string {
+	if root := strings.TrimSpace(os.Getenv("GOMUKS_ROOT")); root != "" {
+		return root
+	}
+	if stateDir := strings.TrimSpace(os.Getenv("MATRIX_STATE_DIR")); stateDir != "" {
+		return stateDir
+	}
+	if mountPath := strings.TrimSpace(os.Getenv("RAILWAY_VOLUME_MOUNT_PATH")); mountPath != "" {
+		return filepath.Join(mountPath, "gomuks")
+	}
+	return ""
 }

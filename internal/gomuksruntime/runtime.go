@@ -173,18 +173,17 @@ func (r *Runtime) Client() *hicli.HiClient {
 	return r.gmx.Client
 }
 
-func (r *Runtime) RequireClient() (*hicli.HiClient, error) {
-	cli := r.Client()
-	if cli == nil || cli.Client == nil {
-		return nil, fmt.Errorf("gomuks runtime is not initialized")
+func (r *Runtime) EventBuffer() *gomuks.EventBuffer {
+	if r.gmx == nil {
+		return nil
 	}
-	return cli, nil
+	return r.gmx.EventBuffer
 }
 
 func (r *Runtime) SubmitJSONCommand(ctx context.Context, cmd jsoncmd.Name, params any, out any) error {
-	cli, err := r.RequireClient()
-	if err != nil {
-		return err
+	cli := r.Client()
+	if cli == nil || cli.Client == nil {
+		return fmt.Errorf("gomuks runtime is not initialized")
 	}
 
 	var payload json.RawMessage
@@ -232,26 +231,10 @@ func (r *Runtime) StateDir() string {
 	return r.dataDir
 }
 
-func (r *Runtime) SubscribeBufferedEvents(handler func(*gomuks.BufferedEvent)) (func(), error) {
-	if handler == nil {
-		return nil, errors.New("handler is required")
-	}
-	if r.gmx == nil || r.gmx.EventBuffer == nil {
-		return nil, errors.New("gomuks runtime is not started")
-	}
-
-	listenerID, _ := r.gmx.EventBuffer.Subscribe(0, nil, handler)
-	return func() {
-		if r.gmx != nil && r.gmx.EventBuffer != nil {
-			r.gmx.EventBuffer.Unsubscribe(listenerID)
-		}
-	}, nil
-}
-
 func (r *Runtime) bootstrapSessionFromEnv(ctx context.Context, gmx *gomuks.Gomuks) error {
-	hasLoginToken := strings.TrimSpace(r.cfg.BeeperLoginToken) != ""
-	hasPasswordLogin := strings.TrimSpace(r.cfg.BeeperUsername) != "" && strings.TrimSpace(r.cfg.BeeperPassword) != ""
-	hasRecoveryKey := strings.TrimSpace(r.cfg.BeeperRecoveryKey) != ""
+	hasLoginToken := strings.TrimSpace(r.cfg.MatrixLoginToken) != ""
+	hasPasswordLogin := strings.TrimSpace(r.cfg.MatrixUsername) != "" && strings.TrimSpace(r.cfg.MatrixPassword) != ""
+	hasRecoveryKey := strings.TrimSpace(r.cfg.MatrixRecoveryKey) != ""
 	if !hasLoginToken && !hasPasswordLogin && !hasRecoveryKey {
 		return nil
 	}
@@ -264,40 +247,40 @@ func (r *Runtime) bootstrapSessionFromEnv(ctx context.Context, gmx *gomuks.Gomuk
 	state := cli.State()
 	if hasLoginToken && !state.IsLoggedIn {
 		err := r.SubmitJSONCommand(ctx, jsoncmd.ReqLoginCustom, &jsoncmd.LoginCustomParams{
-			HomeserverURL: r.cfg.BeeperHomeserverURL,
+			HomeserverURL: r.cfg.MatrixHomeserverURL,
 			Request: &mautrix.ReqLogin{
 				Type:  mautrix.AuthType("org.matrix.login.jwt"),
-				Token: r.cfg.BeeperLoginToken,
+				Token: r.cfg.MatrixLoginToken,
 			},
 		}, nil)
 		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
 			return fmt.Errorf("failed to login using env login token: %w", err)
 		}
-		gmx.Log.Info().Str("homeserver_url", r.cfg.BeeperHomeserverURL).Msg("beeper jwt login completed from environment")
+		gmx.Log.Info().Str("homeserver_url", r.cfg.MatrixHomeserverURL).Msg("matrix jwt login completed from environment")
 	}
 
 	state = cli.State()
 	if hasPasswordLogin && !state.IsLoggedIn {
 		err := r.SubmitJSONCommand(ctx, jsoncmd.ReqLogin, &jsoncmd.LoginParams{
-			HomeserverURL: r.cfg.BeeperHomeserverURL,
-			Username:      r.cfg.BeeperUsername,
-			Password:      r.cfg.BeeperPassword,
+			HomeserverURL: r.cfg.MatrixHomeserverURL,
+			Username:      r.cfg.MatrixUsername,
+			Password:      r.cfg.MatrixPassword,
 		}, nil)
 		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
 			return fmt.Errorf("failed to login using env credentials: %w", err)
 		}
-		gmx.Log.Info().Str("homeserver_url", r.cfg.BeeperHomeserverURL).Msg("beeper password login completed from environment")
+		gmx.Log.Info().Str("homeserver_url", r.cfg.MatrixHomeserverURL).Msg("matrix password login completed from environment")
 	}
 
 	state = cli.State()
 	if hasRecoveryKey && !state.IsVerified {
 		if !state.IsLoggedIn {
-			return errors.New("BEEPER_RECOVERY_KEY was provided, but no logged-in session is available")
+			return errors.New("MATRIX_RECOVERY_KEY was provided, but no logged-in session is available")
 		}
-		if err := r.SubmitJSONCommand(ctx, jsoncmd.ReqVerify, &jsoncmd.VerifyParams{RecoveryKey: r.cfg.BeeperRecoveryKey}, nil); err != nil {
+		if err := r.SubmitJSONCommand(ctx, jsoncmd.ReqVerify, &jsoncmd.VerifyParams{RecoveryKey: r.cfg.MatrixRecoveryKey}, nil); err != nil {
 			return fmt.Errorf("failed to verify using env recovery key: %w", err)
 		}
-		gmx.Log.Info().Msg("beeper verification completed from environment")
+		gmx.Log.Info().Msg("matrix verification completed from environment")
 	}
 
 	return nil

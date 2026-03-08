@@ -154,7 +154,7 @@ func (s *Server) manageLoginToken(w http.ResponseWriter, r *http.Request) error 
 	req.DeviceID = strings.TrimSpace(req.DeviceID)
 	req.DeviceName = strings.TrimSpace(req.DeviceName)
 	if req.HomeserverURL == "" {
-		req.HomeserverURL = s.cfg.BeeperHomeserverURL
+		req.HomeserverURL = s.cfg.MatrixHomeserverURL
 	}
 	if req.HomeserverURL == "" {
 		return errs.Validation(map[string]any{"homeserverURL": "homeserverURL is required"})

@@ -40,7 +40,7 @@ function parseArgs(argv) {
   }
   return {
     help: args.help === true,
-    creatorScript: readOptionalString(args["creator-script"]) ?? process.env.BEEPER_ACCOUNT_CREATOR,
+    creatorScript: readOptionalString(args["creator-script"]) ?? process.env.MATRIX_ACCOUNT_CREATOR,
     botPort: parsePositiveInteger(args["bot-port"], DEFAULT_BOT_PORT, "bot-port"),
     senderPort: parsePositiveInteger(args["sender-port"], DEFAULT_SENDER_PORT, "sender-port"),
     timeoutMs: parsePositiveInteger(args["timeout-ms"], DEFAULT_TIMEOUT_MS, "timeout-ms"),
@@ -147,7 +147,7 @@ async function loadAccounts(options) {
 
   const creatorScript = await resolveCreatorScript(options.creatorScript);
   if (!creatorScript) {
-    throw new Error("No bootstrap script configured. Set BEEPER_ACCOUNT_CREATOR or pass --creator-script.");
+    throw new Error("No bootstrap script configured. Set MATRIX_ACCOUNT_CREATOR or pass --creator-script.");
   }
 
   process.stdout.write("Using configured account bootstrap script\n");
@@ -205,13 +205,13 @@ async function startServer(name, port, account, rootDir) {
     cwd: REPO_ROOT,
     env: {
       ...process.env,
-      BEEPER_ACCESS_TOKEN: accessToken,
-      BEEPER_ALLOW_QUERY_TOKEN: "true",
-      BEEPER_API_LISTEN: `127.0.0.1:${port}`,
+      MATRIX_ACCESS_TOKEN: accessToken,
+      MATRIX_ALLOW_QUERY_TOKEN: "true",
+      MATRIX_API_LISTEN: `127.0.0.1:${port}`,
       GOMUKS_ROOT: stateDir,
-      BEEPER_HOMESERVER_URL: account.baseUrl,
-      BEEPER_LOGIN_TOKEN: account.loginToken,
-      BEEPER_RECOVERY_KEY: account.recoveryKey,
+      MATRIX_HOMESERVER_URL: account.baseUrl,
+      MATRIX_LOGIN_TOKEN: account.loginToken,
+      MATRIX_RECOVERY_KEY: account.recoveryKey,
     },
     stdio: ["ignore", "pipe", "pipe"],
   });

@@ -51,29 +51,36 @@ Once running:
 
 `.env` is loaded automatically from the current working directory if present.
 
-- `BEEPER_API_LISTEN`: listen address for the HTTP server. Default: `127.0.0.1:23373`
-- `BEEPER_ACCESS_TOKEN`: static bearer token for direct API access
-- `BEEPER_ALLOW_QUERY_TOKEN`: set to `true` to allow query-token auth for asset serving
-- `BEEPER_HOMESERVER_URL`: homeserver URL used for bootstrap login. Default: `https://matrix.beeper.com`
-- `BEEPER_LOGIN_TOKEN`: Beeper JWT login token
-- `BEEPER_USERNAME`: username for password login
-- `BEEPER_PASSWORD`: password for password login
-- `BEEPER_RECOVERY_KEY`: recovery key / passphrase for verification
+- `MATRIX_API_LISTEN`: listen address for the HTTP server. Default: `127.0.0.1:23373`
+- `PORT`: when `MATRIX_API_LISTEN` is unset, EasyMatrix will listen on `0.0.0.0:$PORT` for Railway-style runtimes
+- `MATRIX_ACCESS_TOKEN`: static bearer token for direct API access
+- `MATRIX_ALLOW_QUERY_TOKEN`: set to `true` to allow query-token auth for asset serving
+- `EASYMATRIX_MANAGE_SECRET`: optional secret required to access `/manage`. Open `/manage?secret=...` once to establish the browser session.
+- `MATRIX_HOMESERVER_URL`: homeserver URL used for bootstrap login. Default: `https://matrix.beeper.com`
+- `MATRIX_LOGIN_TOKEN`: Matrix JWT login token
+- `MATRIX_USERNAME`: username for password login
+- `MATRIX_PASSWORD`: password for password login
+- `MATRIX_RECOVERY_KEY`: recovery key / passphrase for verification
 
 gomuks-compatible overrides:
 
 - `GOMUKS_ROOT`: use a specific gomuks root with `config/`, `data/`, `cache/`, and `logs/`
+- `MATRIX_STATE_DIR`: alias for `GOMUKS_ROOT`
 - `GOMUKS_CONFIG_HOME`
 - `GOMUKS_DATA_HOME`
 - `GOMUKS_CACHE_HOME`
 - `GOMUKS_LOGS_HOME`
 
+Railway volume integration:
+
+- `RAILWAY_VOLUME_MOUNT_PATH`: when present and no explicit gomuks root is set, EasyMatrix uses `${RAILWAY_VOLUME_MOUNT_PATH}/gomuks`
+
 When no gomuks override is set, EasyMatrix follows gomuks' normal environment and XDG directory resolution so it can reuse existing gomuks sessions and config.
 
 Rules:
 
-- `BEEPER_USERNAME` and `BEEPER_PASSWORD` must be set together.
-- `BEEPER_LOGIN_TOKEN` cannot be combined with `BEEPER_USERNAME` and `BEEPER_PASSWORD`.
+- `MATRIX_USERNAME` and `MATRIX_PASSWORD` must be set together.
+- `MATRIX_LOGIN_TOKEN` cannot be combined with `MATRIX_USERNAME` and `MATRIX_PASSWORD`.
 
 ## Login and Verification
 
@@ -91,9 +98,54 @@ Supported flows:
 - Beeper email-code login helpers
 - recovery-key verification
 
-If `BEEPER_LOGIN_TOKEN` or `BEEPER_USERNAME` / `BEEPER_PASSWORD` are set, plus `BEEPER_RECOVERY_KEY`, the runtime will attempt to bootstrap the session automatically on startup.
+If `MATRIX_LOGIN_TOKEN` or `MATRIX_USERNAME` / `MATRIX_PASSWORD` are set, plus `MATRIX_RECOVERY_KEY`, the runtime will attempt to bootstrap the session automatically on startup.
 
 Protected API routes require a logged-in Beeper homeserver session.
+
+## Railway
+
+This repo includes a root [Dockerfile](/Users/batuhan/Projects/labs/easymatrix/Dockerfile) and [railway.toml](/Users/batuhan/Projects/labs/easymatrix/railway.toml), so Railway builds a Go-only container from `./cmd/server` and healthchecks `GET /v1/info`. Bun is not used in the Railway deploy image.
+
+Deploy button to enable after publishing the template:
+
+```md
+[![Deploy on Railway](https://railway.com/button.svg)](REPLACE_WITH_YOUR_TEMPLATE_URL)
+```
+
+For a template, configure the Railway service like this in the template composer:
+
+- Source repo: this repository
+- Public networking: enabled
+- Volume: attached to the service at `/data`
+- Required variables: `MATRIX_HOMESERVER_URL`, `MATRIX_USERNAME`, `MATRIX_PASSWORD`
+- Required secret: `EASYMATRIX_MANAGE_SECRET`
+
+Recommended template defaults:
+
+- `MATRIX_ALLOW_QUERY_TOKEN=false`
+- `MATRIX_ACCESS_TOKEN`: set this to a generated random secret in the template before publishing so deployers do not need to provide it manually
+- Optional `MATRIX_RECOVERY_KEY` for fully automatic bootstrap, otherwise finish setup in `/manage`
+
+With that setup, EasyMatrix will automatically persist gomuks state under `/data/gomuks`.
+
+Suggested template variable setup:
+
+- `MATRIX_HOMESERVER_URL`: required, default `https://matrix.beeper.com`
+- `MATRIX_USERNAME`: required, no default
+- `MATRIX_PASSWORD`: required, no default
+- `EASYMATRIX_MANAGE_SECRET`: required, use `${{ secret(32) }}`
+- `MATRIX_ACCESS_TOKEN`: optional for deployers, set template default to `${{ secret(32) }}`
+- `MATRIX_ALLOW_QUERY_TOKEN`: default `false`
+- `MATRIX_RECOVERY_KEY`: optional
+
+Suggested publish flow:
+
+1. Create a Railway project from this repo.
+2. Open template creation from the project settings or workspace templates page.
+3. In the template composer, attach a volume at `/data`.
+4. Mark the required variables above in the Variables tab.
+5. Publish the template and copy the generated template URL.
+6. Replace `REPLACE_WITH_YOUR_TEMPLATE_URL` in the button snippet above.
 
 ## JS Package
 
@@ -145,8 +197,8 @@ const embedded = await withEmbedded(BeeperDesktop, {
     accessToken: "local-dev-token",
     stateDir: "/tmp/easymatrix",
     beeperHomeserverURL: "https://matrix.beeper.com",
-    beeperLoginToken: process.env.BEEPER_LOGIN_TOKEN,
-    beeperRecoveryKey: process.env.BEEPER_RECOVERY_KEY,
+    beeperLoginToken: process.env.MATRIX_LOGIN_TOKEN,
+    beeperRecoveryKey: process.env.MATRIX_RECOVERY_KEY,
   },
 });
 
@@ -251,8 +303,8 @@ There is also a helper script for driving the `/manage` login flow from the term
 node ./scripts/easymatrix-login.mjs \
   --base-url http://127.0.0.1:23373 \
   --homeserver-url https://matrix.beeper.com \
-  --login-token "$BEEPER_LOGIN_TOKEN" \
-  --recovery-key "$BEEPER_RECOVERY_KEY"
+  --login-token "$MATRIX_LOGIN_TOKEN" \
+  --recovery-key "$MATRIX_RECOVERY_KEY"
 ```
 
 ## Development

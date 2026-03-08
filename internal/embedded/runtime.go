@@ -254,19 +254,19 @@ func normalizeConfig(input Config) (config.Config, error) {
 	}
 	cfg.AllowQueryTokenAuth = input.AllowQueryTokenAuth
 	if strings.TrimSpace(input.BeeperHomeserverURL) != "" {
-		cfg.BeeperHomeserverURL = input.BeeperHomeserverURL
+		cfg.MatrixHomeserverURL = input.BeeperHomeserverURL
 	}
 	if strings.TrimSpace(input.BeeperLoginToken) != "" {
-		cfg.BeeperLoginToken = input.BeeperLoginToken
+		cfg.MatrixLoginToken = input.BeeperLoginToken
 	}
 	if strings.TrimSpace(input.BeeperUsername) != "" {
-		cfg.BeeperUsername = input.BeeperUsername
+		cfg.MatrixUsername = input.BeeperUsername
 	}
 	if strings.TrimSpace(input.BeeperPassword) != "" {
-		cfg.BeeperPassword = input.BeeperPassword
+		cfg.MatrixPassword = input.BeeperPassword
 	}
 	if strings.TrimSpace(input.BeeperRecoveryKey) != "" {
-		cfg.BeeperRecoveryKey = input.BeeperRecoveryKey
+		cfg.MatrixRecoveryKey = input.BeeperRecoveryKey
 	}
 	return cfg, nil
 }

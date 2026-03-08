@@ -16,7 +16,7 @@ func TestHandlerUsesV1RoutesOnly(t *testing.T) {
 		ListenAddr:          "127.0.0.1:0",
 		StateDir:            t.TempDir(),
 		AccessToken:         "test-token",
-		BeeperHomeserverURL: "https://matrix.beeper.com",
+		MatrixHomeserverURL: "https://matrix.beeper.com",
 	}
 	rt, err := gomuksruntime.New(cfg)
 	if err != nil {
@@ -46,7 +46,7 @@ func TestOAuthProtectedResourceRejectsLegacyV0(t *testing.T) {
 		ListenAddr:          "127.0.0.1:0",
 		StateDir:            t.TempDir(),
 		AccessToken:         "test-token",
-		BeeperHomeserverURL: "https://matrix.beeper.com",
+		MatrixHomeserverURL: "https://matrix.beeper.com",
 	}
 	rt, err := gomuksruntime.New(cfg)
 	if err != nil {
@@ -74,7 +74,7 @@ func TestInfoIncludesTypedMCPField(t *testing.T) {
 		ListenAddr:          "127.0.0.1:23373",
 		StateDir:            t.TempDir(),
 		AccessToken:         "test-token",
-		BeeperHomeserverURL: "https://matrix.beeper.com",
+		MatrixHomeserverURL: "https://matrix.beeper.com",
 	}
 	rt, err := gomuksruntime.New(cfg)
 	if err != nil {
