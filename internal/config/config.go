@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -48,15 +48,7 @@ func Load() (Config, error) {
 	if cfg.BeeperLoginToken != "" && cfg.BeeperUsername != "" {
 		return Config{}, fmt.Errorf("BEEPER_LOGIN_TOKEN cannot be combined with BEEPER_USERNAME/BEEPER_PASSWORD")
 	}
-	stateDir := os.Getenv("BEEPER_STATE_DIR")
-	if stateDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return Config{}, fmt.Errorf("failed to resolve home dir: %w", err)
-		}
-		stateDir = filepath.Join(home, ".local", "share", "easymatrix")
-	}
-	cfg.StateDir = stateDir
+	cfg.StateDir = strings.TrimSpace(os.Getenv("GOMUKS_ROOT"))
 	return cfg, nil
 }
 

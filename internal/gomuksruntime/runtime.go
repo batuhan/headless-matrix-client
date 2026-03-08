@@ -2,6 +2,7 @@ package gomuksruntime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -22,17 +23,60 @@ import (
 )
 
 type Runtime struct {
-	cfg config.Config
-	gmx *gomuks.Gomuks
+	cfg     config.Config
+	dataDir string
+	gmx     *gomuks.Gomuks
 }
 
 func New(cfg config.Config) (*Runtime, error) {
-	stateDir, err := filepath.Abs(cfg.StateDir)
-	if err != nil {
-		return nil, fmt.Errorf("failed to resolve state dir: %w", err)
+	if cfg.StateDir != "" {
+		stateDir, err := filepath.Abs(cfg.StateDir)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve state dir: %w", err)
+		}
+		cfg.StateDir = stateDir
 	}
-	cfg.StateDir = stateDir
-	return &Runtime{cfg: cfg}, nil
+	dataDir, err := resolveDataDir(cfg.StateDir)
+	if err != nil {
+		return nil, err
+	}
+	return &Runtime{cfg: cfg, dataDir: dataDir}, nil
+}
+
+func withConfiguredGomuksRoot(root string, fn func() error) error {
+	if root == "" {
+		return fn()
+	}
+
+	oldRoot, hadRoot := os.LookupEnv("GOMUKS_ROOT")
+	if err := os.Setenv("GOMUKS_ROOT", root); err != nil {
+		return fmt.Errorf("failed to set GOMUKS_ROOT: %w", err)
+	}
+	defer func() {
+		if hadRoot {
+			_ = os.Setenv("GOMUKS_ROOT", oldRoot)
+		} else {
+			_ = os.Unsetenv("GOMUKS_ROOT")
+		}
+	}()
+
+	return fn()
+}
+
+func resolveDataDir(root string) (string, error) {
+	gmx := gomuks.NewGomuks()
+	if err := withConfiguredGomuksRoot(root, func() error {
+		gmx.InitDirectories()
+		return nil
+	}); err != nil {
+		return "", err
+	}
+
+	dataDir, err := filepath.Abs(gmx.DataDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve gomuks data dir: %w", err)
+	}
+	return dataDir, nil
 }
 
 func startClientWithoutExit(gmx *gomuks.Gomuks) error {
@@ -86,16 +130,17 @@ func (r *Runtime) Start(ctx context.Context) error {
 	gmx := gomuks.NewGomuks()
 	gmx.DisableAuth = true
 
-	oldRoot, hadRoot := os.LookupEnv("GOMUKS_ROOT")
-	if err := os.Setenv("GOMUKS_ROOT", r.cfg.StateDir); err != nil {
-		return fmt.Errorf("failed to set GOMUKS_ROOT: %w", err)
+	if err := withConfiguredGomuksRoot(r.cfg.StateDir, func() error {
+		gmx.InitDirectories()
+		return nil
+	}); err != nil {
+		return err
 	}
-	gmx.InitDirectories()
-	if hadRoot {
-		_ = os.Setenv("GOMUKS_ROOT", oldRoot)
-	} else {
-		_ = os.Unsetenv("GOMUKS_ROOT")
+	dataDir, err := filepath.Abs(gmx.DataDir)
+	if err != nil {
+		return fmt.Errorf("failed to resolve gomuks data dir: %w", err)
 	}
+	r.dataDir = dataDir
 
 	if err := gmx.LoadConfig(); err != nil {
 		return fmt.Errorf("failed to load gomuks config: %w", err)
@@ -128,11 +173,66 @@ func (r *Runtime) Client() *hicli.HiClient {
 	return r.gmx.Client
 }
 
-func (r *Runtime) StateDir() string {
-	return r.cfg.StateDir
+func (r *Runtime) RequireClient() (*hicli.HiClient, error) {
+	cli := r.Client()
+	if cli == nil || cli.Client == nil {
+		return nil, fmt.Errorf("gomuks runtime is not initialized")
+	}
+	return cli, nil
 }
 
-func (r *Runtime) SubscribeEvents(handler func(any)) (func(), error) {
+func (r *Runtime) SubmitJSONCommand(ctx context.Context, cmd jsoncmd.Name, params any, out any) error {
+	cli, err := r.RequireClient()
+	if err != nil {
+		return err
+	}
+
+	var payload json.RawMessage
+	if params == nil {
+		payload = []byte(`{}`)
+	} else {
+		raw, err := json.Marshal(params)
+		if err != nil {
+			return fmt.Errorf("failed to encode %s params: %w", cmd, err)
+		}
+		payload = raw
+	}
+
+	resp := cli.SubmitJSONCommand(ctx, &hicli.JSONCommand{
+		Command: cmd,
+		Data:    payload,
+	})
+	if resp == nil {
+		return fmt.Errorf("gomuks returned empty response for %s", cmd)
+	}
+	if resp.Command == jsoncmd.RespError {
+		var message string
+		if err := json.Unmarshal(resp.Data, &message); err != nil || strings.TrimSpace(message) == "" {
+			message = string(resp.Data)
+		}
+		message = strings.TrimSpace(message)
+		if message == "" {
+			message = "unknown error"
+		}
+		return fmt.Errorf("gomuks %s failed: %s", cmd, message)
+	}
+	if resp.Command != jsoncmd.RespSuccess {
+		return fmt.Errorf("gomuks returned unexpected response type %s for %s", resp.Command, cmd)
+	}
+	if out == nil {
+		return nil
+	}
+	if err := json.Unmarshal(resp.Data, out); err != nil {
+		return fmt.Errorf("failed to decode %s response: %w", cmd, err)
+	}
+	return nil
+}
+
+func (r *Runtime) StateDir() string {
+	return r.dataDir
+}
+
+func (r *Runtime) SubscribeBufferedEvents(handler func(*gomuks.BufferedEvent)) (func(), error) {
 	if handler == nil {
 		return nil, errors.New("handler is required")
 	}
@@ -140,12 +240,7 @@ func (r *Runtime) SubscribeEvents(handler func(any)) (func(), error) {
 		return nil, errors.New("gomuks runtime is not started")
 	}
 
-	listenerID, _ := r.gmx.EventBuffer.Subscribe(0, nil, func(evt *gomuks.BufferedEvent) {
-		if evt == nil {
-			return
-		}
-		handler(evt.Data)
-	})
+	listenerID, _ := r.gmx.EventBuffer.Subscribe(0, nil, handler)
 	return func() {
 		if r.gmx != nil && r.gmx.EventBuffer != nil {
 			r.gmx.EventBuffer.Unsubscribe(listenerID)
@@ -168,13 +263,13 @@ func (r *Runtime) bootstrapSessionFromEnv(ctx context.Context, gmx *gomuks.Gomuk
 
 	state := cli.State()
 	if hasLoginToken && !state.IsLoggedIn {
-		err := r.LoginCustom(ctx, &jsoncmd.LoginCustomParams{
+		err := r.SubmitJSONCommand(ctx, jsoncmd.ReqLoginCustom, &jsoncmd.LoginCustomParams{
 			HomeserverURL: r.cfg.BeeperHomeserverURL,
 			Request: &mautrix.ReqLogin{
 				Type:  mautrix.AuthType("org.matrix.login.jwt"),
 				Token: r.cfg.BeeperLoginToken,
 			},
-		})
+		}, nil)
 		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
 			return fmt.Errorf("failed to login using env login token: %w", err)
 		}
@@ -183,11 +278,11 @@ func (r *Runtime) bootstrapSessionFromEnv(ctx context.Context, gmx *gomuks.Gomuk
 
 	state = cli.State()
 	if hasPasswordLogin && !state.IsLoggedIn {
-		err := r.Login(ctx, &jsoncmd.LoginParams{
+		err := r.SubmitJSONCommand(ctx, jsoncmd.ReqLogin, &jsoncmd.LoginParams{
 			HomeserverURL: r.cfg.BeeperHomeserverURL,
 			Username:      r.cfg.BeeperUsername,
 			Password:      r.cfg.BeeperPassword,
-		})
+		}, nil)
 		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
 			return fmt.Errorf("failed to login using env credentials: %w", err)
 		}
@@ -199,7 +294,7 @@ func (r *Runtime) bootstrapSessionFromEnv(ctx context.Context, gmx *gomuks.Gomuk
 		if !state.IsLoggedIn {
 			return errors.New("BEEPER_RECOVERY_KEY was provided, but no logged-in session is available")
 		}
-		if err := r.Verify(ctx, &jsoncmd.VerifyParams{RecoveryKey: r.cfg.BeeperRecoveryKey}); err != nil {
+		if err := r.SubmitJSONCommand(ctx, jsoncmd.ReqVerify, &jsoncmd.VerifyParams{RecoveryKey: r.cfg.BeeperRecoveryKey}, nil); err != nil {
 			return fmt.Errorf("failed to verify using env recovery key: %w", err)
 		}
 		gmx.Log.Info().Msg("beeper verification completed from environment")

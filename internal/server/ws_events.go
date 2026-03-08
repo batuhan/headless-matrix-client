@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"go.mau.fi/gomuks/pkg/gomuks"
 	"go.mau.fi/gomuks/pkg/hicli/database"
 	"go.mau.fi/gomuks/pkg/hicli/jsoncmd"
 	"maunium.net/go/mautrix/event"
@@ -152,9 +153,12 @@ func newWSHub(server *Server) *wsHub {
 
 func (h *wsHub) ensureSubscription() error {
 	h.subscribeOnce.Do(func() {
-		unsub, err := h.server.rt.SubscribeEvents(func(evt any) {
+		unsub, err := h.server.rt.SubscribeBufferedEvents(func(evt *gomuks.BufferedEvent) {
+			if evt == nil {
+				return
+			}
 			select {
-			case h.eventQueue <- evt:
+			case h.eventQueue <- evt.Data:
 			default:
 				// Drop overflowing events to avoid blocking gomuks sync pipeline.
 			}

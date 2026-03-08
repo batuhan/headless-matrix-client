@@ -121,7 +121,7 @@ func (r *Runtime) Stop() {
 }
 
 func (r *Runtime) StateDir() string {
-	return r.cfg.StateDir
+	return r.rt.StateDir()
 }
 
 func (r *Runtime) RuntimeInfo() RuntimeInfo {
@@ -130,7 +130,7 @@ func (r *Runtime) RuntimeInfo() RuntimeInfo {
 	return RuntimeInfo{
 		Started:    r.started,
 		ListenAddr: r.cfg.ListenAddr,
-		StateDir:   r.cfg.StateDir,
+		StateDir:   r.rt.StateDir(),
 	}
 }
 

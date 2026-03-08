@@ -53,13 +53,22 @@ Once running:
 
 - `BEEPER_API_LISTEN`: listen address for the HTTP server. Default: `127.0.0.1:23373`
 - `BEEPER_ACCESS_TOKEN`: static bearer token for direct API access
-- `BEEPER_STATE_DIR`: state directory used by gomuks. Default: `~/.local/share/easymatrix`
 - `BEEPER_ALLOW_QUERY_TOKEN`: set to `true` to allow query-token auth for asset serving
 - `BEEPER_HOMESERVER_URL`: homeserver URL used for bootstrap login. Default: `https://matrix.beeper.com`
 - `BEEPER_LOGIN_TOKEN`: Beeper JWT login token
 - `BEEPER_USERNAME`: username for password login
 - `BEEPER_PASSWORD`: password for password login
 - `BEEPER_RECOVERY_KEY`: recovery key / passphrase for verification
+
+gomuks-compatible overrides:
+
+- `GOMUKS_ROOT`: use a specific gomuks root with `config/`, `data/`, `cache/`, and `logs/`
+- `GOMUKS_CONFIG_HOME`
+- `GOMUKS_DATA_HOME`
+- `GOMUKS_CACHE_HOME`
+- `GOMUKS_LOGS_HOME`
+
+When no gomuks override is set, EasyMatrix follows gomuks' normal environment and XDG directory resolution so it can reuse existing gomuks sessions and config.
 
 Rules:
 

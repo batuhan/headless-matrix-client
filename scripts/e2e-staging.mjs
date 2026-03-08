@@ -208,7 +208,7 @@ async function startServer(name, port, account, rootDir) {
       BEEPER_ACCESS_TOKEN: accessToken,
       BEEPER_ALLOW_QUERY_TOKEN: "true",
       BEEPER_API_LISTEN: `127.0.0.1:${port}`,
-      BEEPER_STATE_DIR: stateDir,
+      GOMUKS_ROOT: stateDir,
       BEEPER_HOMESERVER_URL: account.baseUrl,
       BEEPER_LOGIN_TOKEN: account.loginToken,
       BEEPER_RECOVERY_KEY: account.recoveryKey,

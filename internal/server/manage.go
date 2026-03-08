@@ -42,14 +42,14 @@ func (s *Server) manageState(w http.ResponseWriter, r *http.Request) error {
 }
 
 func (s *Server) getManageState() (manageStateOutput, error) {
-	cli, err := s.rt.ClientState()
-	if err != nil {
-		return manageStateOutput{}, err
+	client := s.rt.Client()
+	if client == nil || client.Client == nil {
+		return manageStateOutput{}, fmt.Errorf("gomuks runtime is not initialized")
 	}
 	state := manageStateOutput{
-		ClientState: cli,
+		ClientState: client.State(),
 	}
-	if client := s.rt.Client(); client != nil && client.Client != nil && client.Client.HomeserverURL != nil {
+	if client.Client.HomeserverURL != nil {
 		host := strings.ToLower(strings.TrimSpace(client.Client.HomeserverURL.Hostname()))
 		state.HomeserverHost = host
 		state.IsBeeperHomeserver = isAllowedBeeperHomeserverHost(host)
@@ -71,11 +71,13 @@ func (s *Server) manageDiscoverHomeserver(w http.ResponseWriter, r *http.Request
 	if _, _, err := userID.Parse(); err != nil {
 		return errs.Validation(map[string]any{"userID": "must be a valid Matrix user ID"})
 	}
-	discovery, err := s.rt.DiscoverHomeserver(r.Context(), userID)
-	if err != nil {
+	var discovery mautrix.ClientWellKnown
+	if err := s.rt.SubmitJSONCommand(r.Context(), jsoncmd.ReqDiscoverHomeserver, &jsoncmd.DiscoverHomeserverParams{
+		UserID: userID,
+	}, &discovery); err != nil {
 		return errs.Internal(err)
 	}
-	return writeJSON(w, discovery)
+	return writeJSON(w, &discovery)
 }
 
 func (s *Server) manageLoginFlows(w http.ResponseWriter, r *http.Request) error {
@@ -89,11 +91,13 @@ func (s *Server) manageLoginFlows(w http.ResponseWriter, r *http.Request) error 
 	if req.HomeserverURL == "" {
 		return errs.Validation(map[string]any{"homeserverURL": "homeserverURL is required"})
 	}
-	loginFlows, err := s.rt.GetLoginFlows(r.Context(), req.HomeserverURL)
-	if err != nil {
+	var loginFlows mautrix.RespLoginFlows
+	if err := s.rt.SubmitJSONCommand(r.Context(), jsoncmd.ReqGetLoginFlows, &jsoncmd.GetLoginFlowsParams{
+		HomeserverURL: req.HomeserverURL,
+	}, &loginFlows); err != nil {
 		return errs.Internal(err)
 	}
-	return writeJSON(w, loginFlows)
+	return writeJSON(w, &loginFlows)
 }
 
 func (s *Server) manageLoginPassword(w http.ResponseWriter, r *http.Request) error {
@@ -116,11 +120,11 @@ func (s *Server) manageLoginPassword(w http.ResponseWriter, r *http.Request) err
 	if req.Password == "" {
 		return errs.Validation(map[string]any{"password": "password is required"})
 	}
-	err := s.rt.Login(r.Context(), &jsoncmd.LoginParams{
+	err := s.rt.SubmitJSONCommand(r.Context(), jsoncmd.ReqLogin, &jsoncmd.LoginParams{
 		HomeserverURL: req.HomeserverURL,
 		Username:      req.Username,
 		Password:      req.Password,
-	})
+	}, nil)
 	if err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
 			return errs.Internal(err)
@@ -137,6 +141,7 @@ func (s *Server) manageLoginToken(w http.ResponseWriter, r *http.Request) error 
 	var req struct {
 		HomeserverURL string `json:"homeserverURL"`
 		LoginToken    string `json:"loginToken"`
+		LoginType     string `json:"loginType,omitempty"`
 		DeviceID      string `json:"deviceID,omitempty"`
 		DeviceName    string `json:"deviceName,omitempty"`
 	}
@@ -145,6 +150,7 @@ func (s *Server) manageLoginToken(w http.ResponseWriter, r *http.Request) error 
 	}
 	req.HomeserverURL = strings.TrimSpace(req.HomeserverURL)
 	req.LoginToken = strings.TrimSpace(req.LoginToken)
+	req.LoginType = strings.TrimSpace(req.LoginType)
 	req.DeviceID = strings.TrimSpace(req.DeviceID)
 	req.DeviceName = strings.TrimSpace(req.DeviceName)
 	if req.HomeserverURL == "" {
@@ -156,18 +162,21 @@ func (s *Server) manageLoginToken(w http.ResponseWriter, r *http.Request) error 
 	if req.LoginToken == "" {
 		return errs.Validation(map[string]any{"loginToken": "loginToken is required"})
 	}
+	if req.LoginType == "" {
+		req.LoginType = string(mautrix.AuthType("org.matrix.login.jwt"))
+	}
 	loginReq := &mautrix.ReqLogin{
-		Type:                     mautrix.AuthType("org.matrix.login.jwt"),
+		Type:                     mautrix.AuthType(req.LoginType),
 		Token:                    req.LoginToken,
 		InitialDeviceDisplayName: req.DeviceName,
 	}
 	if req.DeviceID != "" {
 		loginReq.DeviceID = id.DeviceID(req.DeviceID)
 	}
-	err := s.rt.LoginCustom(r.Context(), &jsoncmd.LoginCustomParams{
+	err := s.rt.SubmitJSONCommand(r.Context(), jsoncmd.ReqLoginCustom, &jsoncmd.LoginCustomParams{
 		HomeserverURL: req.HomeserverURL,
 		Request:       loginReq,
-	})
+	}, nil)
 	if err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
 			return errs.Internal(err)
@@ -195,10 +204,10 @@ func (s *Server) manageLoginCustom(w http.ResponseWriter, r *http.Request) error
 	if strings.TrimSpace(string(req.Request.Type)) == "" {
 		return errs.Validation(map[string]any{"request": "request.type is required"})
 	}
-	err := s.rt.LoginCustom(r.Context(), &jsoncmd.LoginCustomParams{
+	err := s.rt.SubmitJSONCommand(r.Context(), jsoncmd.ReqLoginCustom, &jsoncmd.LoginCustomParams{
 		HomeserverURL: req.HomeserverURL,
 		Request:       &req.Request,
-	})
+	}, nil)
 	if err != nil {
 		if !strings.Contains(strings.ToLower(err.Error()), "already logged in") {
 			return errs.Internal(err)
@@ -222,7 +231,7 @@ func (s *Server) manageVerify(w http.ResponseWriter, r *http.Request) error {
 	if req.RecoveryKey == "" {
 		return errs.Validation(map[string]any{"recoveryKey": "recoveryKey is required"})
 	}
-	err := s.rt.Verify(r.Context(), &jsoncmd.VerifyParams{RecoveryKey: req.RecoveryKey})
+	err := s.rt.SubmitJSONCommand(r.Context(), jsoncmd.ReqVerify, &jsoncmd.VerifyParams{RecoveryKey: req.RecoveryKey}, nil)
 	if err != nil {
 		return errs.Internal(err)
 	}
@@ -557,6 +566,13 @@ const manageHTML = `<!doctype html>
           <input id="jwt-hs" placeholder="https://matrix.beeper.com" value="https://matrix.beeper.com">
         </div>
         <div>
+          <label for="jwt-type">Login type</label>
+          <select id="jwt-type">
+            <option value="org.matrix.login.jwt">org.matrix.login.jwt</option>
+            <option value="m.login.token">m.login.token</option>
+          </select>
+        </div>
+        <div>
           <label for="jwt-token">Login token</label>
           <input id="jwt-token" placeholder="eyJ...">
         </div>
@@ -572,6 +588,42 @@ const manageHTML = `<!doctype html>
         </div>
       </div>
       <button id="jwt-login">Login With Token</button>
+    </div>
+
+    <div class="card">
+      <h2>Custom Matrix Login Request</h2>
+      <div class="muted" style="margin-bottom: 8px;">Use this for any non-password Matrix login request supported by the homeserver. Password and token/JWT presets are available below. Browser SSO redirects are not handled here.</div>
+      <div class="row">
+        <div>
+          <label for="custom-hs">Homeserver URL</label>
+          <input id="custom-hs" placeholder="https://matrix.beeper.com" value="https://matrix.beeper.com">
+        </div>
+      </div>
+      <div class="inline" style="margin-bottom: 10px; flex-wrap: wrap; align-items: stretch;">
+        <button id="preset-password" class="secondary" style="width: auto;">Password Preset</button>
+        <button id="preset-token" class="secondary" style="width: auto;">m.login.token Preset</button>
+        <button id="preset-jwt" class="secondary" style="width: auto;">JWT Preset</button>
+        <button id="preset-empty" class="secondary" style="width: auto;">Empty Request</button>
+      </div>
+      <div id="flow-buttons" class="inline" style="margin-bottom: 10px; flex-wrap: wrap;"></div>
+      <div class="row">
+        <div>
+          <label for="custom-request">ReqLogin JSON</label>
+          <textarea id="custom-request" style="min-height: 180px;">{
+  "type": "m.login.password",
+  "identifier": {
+    "type": "m.id.user",
+    "user": ""
+  },
+  "password": "",
+  "initial_device_display_name": "EasyMatrix"
+}</textarea>
+        </div>
+      </div>
+      <div class="inline" style="margin-top: 10px;">
+        <button id="custom-format" class="secondary" style="width: auto;">Format JSON</button>
+        <button id="custom-login" style="width: auto;">Login With Custom Request</button>
+      </div>
     </div>
 
     <div class="card">
@@ -611,6 +663,7 @@ const manageHTML = `<!doctype html>
           <button id="flows-run" class="secondary">Get Login Flows</button>
         </div>
       </div>
+      <div class="muted" id="flows-summary" style="margin-bottom: 8px;"></div>
       <pre id="flows-result"></pre>
     </div>
 
@@ -619,6 +672,90 @@ const manageHTML = `<!doctype html>
 
   <script>
     let beeperRequestID = "";
+
+    function defaultPasswordRequest() {
+      return {
+        type: "m.login.password",
+        identifier: {
+          type: "m.id.user",
+          user: ""
+        },
+        password: "",
+        initial_device_display_name: "EasyMatrix"
+      };
+    }
+
+    function defaultTokenRequest(type) {
+      return {
+        type: type,
+        token: "",
+        initial_device_display_name: "EasyMatrix"
+      };
+    }
+
+    function setCustomRequest(value) {
+      document.getElementById("custom-request").value = pretty(value);
+    }
+
+    function syncHomeserverInputs(value) {
+      if (!value) {
+        return;
+      }
+      document.getElementById("pw-hs").value = value;
+      document.getElementById("jwt-hs").value = value;
+      document.getElementById("flows-hs").value = value;
+      document.getElementById("custom-hs").value = value;
+    }
+
+    function applyFlowPreset(flowType) {
+      if (!flowType) {
+        return;
+      }
+      if (flowType === "m.login.password") {
+        setCustomRequest(defaultPasswordRequest());
+        return;
+      }
+      if (flowType === "m.login.token") {
+        setCustomRequest(defaultTokenRequest("m.login.token"));
+        return;
+      }
+      if (flowType === "org.matrix.login.jwt") {
+        setCustomRequest(defaultTokenRequest("org.matrix.login.jwt"));
+        return;
+      }
+      setCustomRequest({
+        type: flowType
+      });
+    }
+
+    function renderFlowButtons(result) {
+      const wrap = document.getElementById("flow-buttons");
+      const summary = document.getElementById("flows-summary");
+      wrap.innerHTML = "";
+      const flows = result && Array.isArray(result.flows) ? result.flows : [];
+      if (!flows.length) {
+        summary.textContent = "No login flows returned.";
+        return;
+      }
+      summary.textContent = "Advertised login flows: " + flows.map(function (flow) {
+        return String(flow.type || "");
+      }).filter(Boolean).join(", ");
+      flows.forEach(function (flow) {
+        const type = String(flow && flow.type || "");
+        if (!type) {
+          return;
+        }
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "secondary";
+        button.style.width = "auto";
+        button.textContent = type;
+        button.addEventListener("click", function () {
+          applyFlowPreset(type);
+        });
+        wrap.appendChild(button);
+      });
+    }
 
     function setStatus(message, isError) {
       const el = document.getElementById("status");
@@ -729,6 +866,14 @@ const manageHTML = `<!doctype html>
           request: beeperRequestID,
           login: loginResp
         });
+        document.getElementById("jwt-type").value = "org.matrix.login.jwt";
+        document.getElementById("jwt-token").value = String(submit.token);
+        syncHomeserverInputs("https://matrix." + domain);
+        setCustomRequest({
+          type: "org.matrix.login.jwt",
+          token: String(submit.token),
+          initial_device_display_name: "EasyMatrix"
+        });
         await refreshState();
       });
     });
@@ -751,13 +896,55 @@ const manageHTML = `<!doctype html>
       run(async function () {
         const homeserverURL = document.getElementById("jwt-hs").value.trim();
         const loginToken = document.getElementById("jwt-token").value.trim();
+        const loginType = document.getElementById("jwt-type").value.trim();
         const deviceID = document.getElementById("jwt-device-id").value.trim();
         const deviceName = document.getElementById("jwt-device-name").value.trim();
         await api("/manage/login-token", {
           homeserverURL: homeserverURL,
+          loginType: loginType,
           loginToken: loginToken,
           deviceID: deviceID || undefined,
           deviceName: deviceName || undefined
+        });
+        await refreshState();
+      });
+    });
+
+    document.getElementById("preset-password").addEventListener("click", function () {
+      setCustomRequest(defaultPasswordRequest());
+    });
+
+    document.getElementById("preset-token").addEventListener("click", function () {
+      setCustomRequest(defaultTokenRequest("m.login.token"));
+    });
+
+    document.getElementById("preset-jwt").addEventListener("click", function () {
+      setCustomRequest(defaultTokenRequest("org.matrix.login.jwt"));
+    });
+
+    document.getElementById("preset-empty").addEventListener("click", function () {
+      setCustomRequest({ type: "" });
+    });
+
+    document.getElementById("custom-format").addEventListener("click", function () {
+      try {
+        const parsed = JSON.parse(document.getElementById("custom-request").value);
+        setCustomRequest(parsed);
+      } catch (_) {}
+    });
+
+    document.getElementById("custom-login").addEventListener("click", function () {
+      run(async function () {
+        const homeserverURL = document.getElementById("custom-hs").value.trim();
+        let request;
+        try {
+          request = JSON.parse(document.getElementById("custom-request").value);
+        } catch (_) {
+          throw new Error("Custom login request must be valid JSON.");
+        }
+        await api("/manage/login-custom", {
+          homeserverURL: homeserverURL,
+          request: request
         });
         await refreshState();
       });
@@ -778,9 +965,7 @@ const manageHTML = `<!doctype html>
         document.getElementById("flows-result").textContent = pretty(result);
         const hs = result && result["m.homeserver"] && result["m.homeserver"].base_url;
         if (hs) {
-          document.getElementById("pw-hs").value = hs;
-          document.getElementById("jwt-hs").value = hs;
-          document.getElementById("flows-hs").value = hs;
+          syncHomeserverInputs(hs);
         }
       });
     });
@@ -790,6 +975,8 @@ const manageHTML = `<!doctype html>
         const homeserverURL = document.getElementById("flows-hs").value.trim();
         const result = await api("/manage/login-flows", { homeserverURL: homeserverURL });
         document.getElementById("flows-result").textContent = pretty(result);
+        syncHomeserverInputs(homeserverURL);
+        renderFlowButtons(result);
       });
     });
 
