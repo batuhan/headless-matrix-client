@@ -51,11 +51,43 @@ func userFromLocalBridgeProfile(remoteID string, profileData map[string]any) com
 }
 
 func userFromMemberEvent(userID string, member event.MemberEventContent, selfUserID string) compat.User {
+	phone := extractPhoneFromGhostID(userID)
 	return newCompatUser(userShape{
 		ID:            userID,
 		FullName:      member.Displayname,
 		ImgURL:        string(member.AvatarURL),
+		PhoneNumber:   phone,
 		CannotMessage: false,
 		IsSelf:        userID == selfUserID,
 	})
+}
+
+// extractPhoneFromGhostID tries to extract a phone number from bridge ghost user IDs.
+// e.g., @whatsapp_8801581507724:beeper.local → +8801581507724
+func extractPhoneFromGhostID(userID string) string {
+	localpart := userID
+	if strings.HasPrefix(localpart, "@") {
+		localpart = localpart[1:]
+	}
+	if idx := strings.Index(localpart, ":"); idx > 0 {
+		localpart = localpart[:idx]
+	}
+	// Only extract for known phone-based bridges.
+	for _, prefix := range []string{"whatsapp_", "signal_", "gmessages_", "gvoice_"} {
+		if strings.HasPrefix(localpart, prefix) {
+			num := localpart[len(prefix):]
+			// Validate it looks like a phone number (all digits).
+			allDigits := true
+			for _, ch := range num {
+				if ch < '0' || ch > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits && len(num) >= 7 {
+				return "+" + num
+			}
+		}
+	}
+	return ""
 }

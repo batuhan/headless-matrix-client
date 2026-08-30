@@ -43,8 +43,15 @@ export interface EmbeddedSubscriptionsSetCommand {
   chatIDs: string[];
 }
 
+export interface EmbeddedPresenceSetCommand {
+  type: "presence.set";
+  requestID?: string;
+  active: boolean;
+}
+
 export type EmbeddedRealtimeCommand =
   | EmbeddedSubscriptionsSetCommand
+  | EmbeddedPresenceSetCommand
   | ({ type: string } & Record<string, unknown>);
 
 export interface EmbeddedReadyEvent {
@@ -57,6 +64,12 @@ export interface EmbeddedSubscriptionsUpdatedEvent {
   type: "subscriptions.updated";
   requestID?: string;
   chatIDs: string[];
+}
+
+export interface EmbeddedPresenceUpdatedEvent {
+  type: "presence.updated";
+  requestID?: string;
+  active: boolean;
 }
 
 export interface EmbeddedRealtimeErrorEvent {
@@ -78,6 +91,7 @@ export interface EmbeddedDomainEvent {
 export type EmbeddedRealtimeEvent =
   | EmbeddedReadyEvent
   | EmbeddedSubscriptionsUpdatedEvent
+  | EmbeddedPresenceUpdatedEvent
   | EmbeddedRealtimeErrorEvent
   | EmbeddedDomainEvent
   | ({ type: string } & Record<string, unknown>);

@@ -18,6 +18,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime/cgo"
 	"sync"
 	"unsafe"
@@ -73,16 +75,46 @@ func invokeJSON(rt *ffiRuntime, payload string) *C.char {
 	return marshalResult(result)
 }
 
+var (
+	lastErrMu sync.Mutex
+	lastErr   string
+)
+
+func setLastError(err error) {
+	lastErrMu.Lock()
+	defer lastErrMu.Unlock()
+	if err == nil {
+		lastErr = ""
+	} else {
+		lastErr = err.Error()
+	}
+}
+
+//export EasyMatrixLastError
+func EasyMatrixLastError() *C.char {
+	lastErrMu.Lock()
+	defer lastErrMu.Unlock()
+	return cString(lastErr)
+}
+
 //export EasyMatrixCreate
 func EasyMatrixCreate(cfgJSON *C.char) C.EasyMatrixHandle {
 	var cfg embedded.Config
 	if raw := goString(cfgJSON); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+			setLastError(fmt.Errorf("invalid config json: %w", err))
 			return 0
 		}
 	}
+	if cfg.StateDir != "" {
+		_ = os.Setenv("GOMUKS_ROOT", cfg.StateDir)
+		_ = os.Setenv("DEBUG_DIR", filepath.Join(cfg.StateDir, "logs"))
+		_ = os.Setenv("GOMUKS_LOGS_HOME", filepath.Join(cfg.StateDir, "logs"))
+		_ = os.Chdir(cfg.StateDir)
+	}
 	rt, err := embedded.New(cfg)
 	if err != nil {
+		setLastError(fmt.Errorf("embedded.New: %w", err))
 		return 0
 	}
 	return C.EasyMatrixHandle(cgo.NewHandle(&ffiRuntime{
@@ -95,6 +127,26 @@ func EasyMatrixCreate(cfgJSON *C.char) C.EasyMatrixHandle {
 func EasyMatrixStart(handle C.EasyMatrixHandle) C.int {
 	rt := runtimeFromHandle(handle)
 	if err := rt.runtime.Start(context.Background()); err != nil {
+		return 1
+	}
+	return 0
+}
+
+//export EasyMatrixServe
+func EasyMatrixServe(handle C.EasyMatrixHandle, listenAddr *C.char) C.int {
+	rt := runtimeFromHandle(handle)
+	if err := rt.runtime.Serve(context.Background(), goString(listenAddr)); err != nil {
+		setLastError(fmt.Errorf("serve: %w", err))
+		return 1
+	}
+	return 0
+}
+
+//export EasyMatrixResume
+func EasyMatrixResume(handle C.EasyMatrixHandle, listenAddr *C.char) C.int {
+	rt := runtimeFromHandle(handle)
+	if err := rt.runtime.Rebind(context.Background(), goString(listenAddr)); err != nil {
+		setLastError(fmt.Errorf("resume: %w", err))
 		return 1
 	}
 	return 0

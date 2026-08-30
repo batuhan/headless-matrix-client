@@ -23,6 +23,11 @@ type Config struct {
 	MatrixUsername      string
 	MatrixPassword      string
 	MatrixRecoveryKey   string
+	APNSKeyPath         string
+	APNSKeyID           string
+	APNSTeamID          string
+	APNSTopic           string
+	APNSEnvironment     string
 }
 
 const (
@@ -45,6 +50,11 @@ func Load() (Config, error) {
 		MatrixUsername:      os.Getenv("MATRIX_USERNAME"),
 		MatrixPassword:      os.Getenv("MATRIX_PASSWORD"),
 		MatrixRecoveryKey:   os.Getenv("MATRIX_RECOVERY_KEY"),
+		APNSKeyPath:         strings.TrimSpace(os.Getenv("APNS_KEY_PATH")),
+		APNSKeyID:           strings.TrimSpace(os.Getenv("APNS_KEY_ID")),
+		APNSTeamID:          strings.TrimSpace(os.Getenv("APNS_TEAM_ID")),
+		APNSTopic:           strings.TrimSpace(os.Getenv("APNS_TOPIC")),
+		APNSEnvironment:     getenvDefault("APNS_ENVIRONMENT", "sandbox"),
 	}
 	if (cfg.MatrixUsername == "") != (cfg.MatrixPassword == "") {
 		return Config{}, fmt.Errorf("MATRIX_USERNAME and MATRIX_PASSWORD must be provided together")

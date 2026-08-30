@@ -5,10 +5,12 @@ go 1.24.0
 require (
 	github.com/beeper/desktop-api-go v0.4.0
 	github.com/coder/websocket v1.8.14
+	github.com/golang-jwt/jwt/v5 v5.2.2
 	github.com/joho/godotenv v1.5.1
 	github.com/modelcontextprotocol/go-sdk v1.3.0
 	go.mau.fi/gomuks v0.2601.0
 	go.mau.fi/util v0.9.6-0.20260124144959-47fbccd7a8f4
+	golang.org/x/net v0.49.0
 	maunium.net/go/mautrix v0.26.3-0.20260128193407-2423716f8394
 )
 
@@ -21,7 +23,6 @@ require (
 	github.com/disintegration/imaging v1.6.2 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
-	github.com/golang-jwt/jwt/v5 v5.2.2 // indirect
 	github.com/lucasb-eyer/go-colorful v1.3.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -41,7 +42,6 @@ require (
 	golang.org/x/crypto v0.47.0 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
 	golang.org/x/image v0.35.0 // indirect
-	golang.org/x/net v0.49.0 // indirect
 	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect

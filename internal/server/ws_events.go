@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -18,6 +20,8 @@ import (
 	"go.mau.fi/gomuks/pkg/hicli/jsoncmd"
 	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
+
+	"github.com/batuhan/easymatrix/internal/compat"
 )
 
 const (
@@ -36,12 +40,14 @@ const (
 	wsDomainTypeChatDeleted      = "chat.deleted"
 	wsDomainTypeMessageUpserted  = "message.upserted"
 	wsDomainTypeMessageDeleted   = "message.deleted"
+	wsDomainTypeReceiptUpdated   = "receipt.updated"
 	wsErrorType                  = "error"
 	wsErrorCodeInvalidCommand    = "INVALID_COMMAND"
 	wsErrorCodeInvalidPayload    = "INVALID_PAYLOAD"
 	wsErrorCodeNotSubscribed     = "NOT_SUBSCRIBED"
 	wsErrorCodeInternal          = "INTERNAL_ERROR"
 	wsWildcardSubscriptionChatID = "*"
+	maxPushParticipants          = 8
 )
 
 type wsSetSubscriptionsInput struct {
@@ -131,9 +137,8 @@ type wsHub struct {
 	clients      map[uint64]*wsClient
 	nextClientID uint64
 
-	subscribeOnce sync.Once
-	subscribeErr  error
-	unsubscribe   func()
+	subscribeMu sync.Mutex
+	unsubscribe func()
 
 	eventQueue chan any
 
@@ -152,30 +157,33 @@ func newWSHub(server *Server) *wsHub {
 }
 
 func (h *wsHub) ensureSubscription() error {
-	h.subscribeOnce.Do(func() {
-		buffer := h.server.rt.EventBuffer()
-		if buffer == nil {
-			h.subscribeErr = errors.New("gomuks runtime is not started")
+	h.subscribeMu.Lock()
+	defer h.subscribeMu.Unlock()
+	if h.unsubscribe != nil {
+		return nil
+	}
+
+	buffer := h.server.rt.EventBuffer()
+	if buffer == nil {
+		return errors.New("gomuks runtime is not started")
+	}
+	listenerID, _ := buffer.Subscribe(0, nil, func(evt *gomuks.BufferedEvent) {
+		if evt == nil {
 			return
 		}
-		listenerID, _ := buffer.Subscribe(0, nil, func(evt *gomuks.BufferedEvent) {
-			if evt == nil {
-				return
-			}
-			select {
-			case h.eventQueue <- evt.Data:
-			default:
-				// Drop overflowing events to avoid blocking gomuks sync pipeline.
-			}
-		})
-		h.unsubscribe = func() {
-			if currentBuffer := h.server.rt.EventBuffer(); currentBuffer != nil {
-				currentBuffer.Unsubscribe(listenerID)
-			}
+		select {
+		case h.eventQueue <- evt.Data:
+		default:
+			// Drop overflowing events to avoid blocking gomuks sync pipeline.
 		}
-		go h.run()
 	})
-	return h.subscribeErr
+	h.unsubscribe = func() {
+		if currentBuffer := h.server.rt.EventBuffer(); currentBuffer != nil {
+			currentBuffer.Unsubscribe(listenerID)
+		}
+	}
+	go h.run()
+	return nil
 }
 
 func (h *wsHub) run() {
@@ -239,7 +247,7 @@ func (h *wsHub) open(send realtimeSender, ping realtimePinger, close realtimeClo
 	}
 	h.write(client, wsReadyMessage{
 		Type:    wsReadyType,
-		Version: 1,
+		Version: 2,
 		ChatIDs: []string{},
 	})
 	return &EmbeddedRealtimeConnection{hub: h, id: id}, nil
@@ -277,22 +285,52 @@ func (h *wsHub) processSyncComplete(syncComplete *jsoncmd.SyncComplete) {
 	domainEvents := mapSyncCompleteToDomainEvents(syncComplete)
 	for _, domainEvent := range domainEvents {
 		targets := h.subscribedTargets(domainEvent.ChatID)
-		if len(targets) == 0 {
+		// Push unconditionally for new messages. A WebSocket subscription says
+		// "some client has this chat open", not "every registered device does",
+		// so suppressing on it used to silence the phone in your pocket
+		// whenever the Mac had the same chat on screen. Clients decide for
+		// themselves whether to surface an arriving push (see
+		// NotificationService.willPresent).
+		wantsPush := domainEvent.Type == wsDomainTypeMessageUpserted && h.server.push.canSend()
+		if wantsPush && !h.server.chatAllowsPush(context.Background(), domainEvent.ChatID) {
+			wantsPush = false
+		}
+		if len(targets) == 0 && !wantsPush {
 			continue
 		}
 
 		var entries []compatRecord
-		if domainEvent.Type == wsDomainTypeMessageUpserted {
+		if domainEvent.Type == wsDomainTypeMessageUpserted || domainEvent.Type == wsDomainTypeMessageDeleted {
 			hydrated, err := h.server.hydrateMessagesForWSEvent(domainEvent.ChatID, domainEvent.IDs)
-			if err != nil || len(hydrated) == 0 {
+			if err != nil || (domainEvent.Type == wsDomainTypeMessageUpserted && len(hydrated) == 0) {
 				continue
 			}
 			entries = hydrated
+		}
+		if domainEvent.Type == wsDomainTypeReceiptUpdated {
+			hydrated, err := h.server.hydrateReceiptForWSEvent(domainEvent.ChatID)
+			if err == nil && hydrated != nil {
+				entries = []compatRecord{hydrated}
+			}
+		}
+		if domainEvent.Type == wsDomainTypeChatUpserted {
+			// Hydrate the chat summary so clients patch a single sidebar row
+			// instead of refetching the whole chat list. On any failure we send
+			// the event bare (no entries); the client then falls back to a list
+			// refresh, so correctness is preserved.
+			if hydrated, err := h.server.hydrateChatForWSEvent(domainEvent.ChatID); err == nil && hydrated != nil {
+				entries = []compatRecord{hydrated}
+			}
 		}
 
 		now := time.Now().UTC()
 		if h.dropDuplicate(domainEvent, entries, now) {
 			continue
+		}
+
+		if wantsPush && len(entries) > 0 {
+			h.server.addPushChatContext(domainEvent.ChatID, entries)
+			h.server.push.enqueueMessages(entries)
 		}
 
 		for _, target := range targets {
@@ -313,6 +351,102 @@ func (h *wsHub) processSyncComplete(syncComplete *jsoncmd.SyncComplete) {
 			h.write(target, payload)
 		}
 	}
+}
+
+func (s *Server) chatAllowsPush(ctx context.Context, chatID string) bool {
+	cli := s.rt.Client()
+	if cli == nil || cli.Account == nil {
+		return false
+	}
+	accountData, err := cli.DB.AccountData.GetAllRoom(ctx, cli.Account.UserID, id.RoomID(chatID))
+	if err != nil {
+		log.Printf("failed to load notification state for push in %s: %v", chatID, err)
+		return false
+	}
+	return roomAccountDataAllowsPush(accountData)
+}
+
+func roomAccountDataAllowsPush(accountData []*database.AccountData) bool {
+	state := roomAccountDataState{}
+	for _, item := range accountData {
+		if item == nil {
+			continue
+		}
+		state = applyRoomAccountDataContent(state, item.Type, item.Content)
+	}
+	// Match Relay's local-notification gate: only unmuted chats in the
+	// primary inbox are eligible. Low-priority and archived chats remain
+	// available in their dedicated inboxes without generating alerts.
+	return !state.IsMuted && !state.IsLowPriority && !state.EffectiveArchived()
+}
+
+func (s *Server) addPushChatContext(chatID string, entries []compatRecord) {
+	cli := s.rt.Client()
+	if cli == nil {
+		return
+	}
+	room, err := cli.DB.Room.Get(context.Background(), id.RoomID(chatID))
+	if err != nil || room == nil {
+		return
+	}
+
+	title := strings.TrimSpace(ptrString(room.Name))
+	isGroupChat := room.DMUserID == nil || strings.TrimSpace(string(*room.DMUserID)) == ""
+	participants, _ := s.loadRoomParticipants(context.Background(), room)
+	for _, entry := range entries {
+		entry["chatTitle"] = title
+		entry["isGroupChat"] = isGroupChat
+		entry["pushAvatarURL"] = pushAvatarURL(room, participants, entry, isGroupChat)
+		entry["pushParticipants"] = pushGroupParticipants(participants, entry, isGroupChat)
+	}
+}
+
+func pushGroupParticipants(participants []compat.User, entry compatRecord, isGroupChat bool) []pushParticipant {
+	if !isGroupChat {
+		return nil
+	}
+
+	senderID, _ := entry["senderID"].(string)
+	output := make([]pushParticipant, 0, min(len(participants), maxPushParticipants))
+	for _, participant := range participants {
+		participantID := strings.TrimSpace(participant.ID)
+		if participantID == "" || participant.IsSelf || participantID == senderID {
+			continue
+		}
+		name := strings.TrimSpace(participant.FullName)
+		if name == "" {
+			name = strings.TrimSpace(participant.Username)
+		}
+		if name == "" {
+			name = participantID
+		}
+		output = append(output, pushParticipant{ID: participantID, Name: name})
+		if len(output) == maxPushParticipants {
+			break
+		}
+	}
+	return output
+}
+
+func pushAvatarURL(room *database.Room, participants []compat.User, entry compatRecord, isGroupChat bool) string {
+	if isGroupChat {
+		if room.Avatar == nil {
+			return ""
+		}
+		avatarURL := strings.TrimSpace(room.Avatar.String())
+		if avatarURL == "mxc://" {
+			return ""
+		}
+		return avatarURL
+	}
+
+	senderID, _ := entry["senderID"].(string)
+	for _, participant := range participants {
+		if participant.ID == senderID {
+			return strings.TrimSpace(participant.ImgURL)
+		}
+	}
+	return ""
 }
 
 func (h *wsHub) subscribedTargets(chatID string) []*wsClient {
@@ -400,6 +534,18 @@ func (s *Server) hydrateMessagesForWSEvent(chatID string, messageIDs []string) (
 		if getErr != nil || evt == nil || evt.RoomID != roomID {
 			continue
 		}
+		// 2026-06-06: GetByID's SQL hardcodes timeline_rowid as -1, so every
+		// hydrated message got sortKey "-1" and the client sorted it to the
+		// top of the timeline until the next full reload (sends never
+		// scrolled to bottom). Resolve the real timeline rowid; if the event
+		// isn't in the timeline yet, zero it so messageSortKey falls back to
+		// RowID/timestamp instead of trusting the -1 placeholder.
+		var timelineRowID int64
+		if scanErr := cli.DB.QueryRow(context.Background(), timelineRowIDForEventQuery, roomID, evt.ID).Scan(&timelineRowID); scanErr == nil && timelineRowID != 0 {
+			evt.TimelineRowID = database.TimelineRowID(timelineRowID)
+		} else {
+			evt.TimelineRowID = 0
+		}
 		events = append(events, evt)
 	}
 	if len(events) == 0 {
@@ -425,6 +571,9 @@ func (s *Server) hydrateMessagesForWSEvent(chatID string, messageIDs []string) (
 		if marshalErr != nil {
 			continue
 		}
+		if transactionID := strings.TrimSpace(evt.TransactionID); transactionID != "" {
+			serialized["transactionID"] = transactionID
+		}
 		byID[message.ID] = serialized
 	}
 
@@ -435,6 +584,53 @@ func (s *Server) hydrateMessagesForWSEvent(chatID string, messageIDs []string) (
 		}
 	}
 	return output, nil
+}
+
+// hydrateChatForWSEvent builds the same chat summary the list endpoint returns
+// for a single room, so a chat.upserted event carries enough for the client to
+// patch one sidebar row (preview, unread, ordering, flags) instead of refetching
+// the entire chat list on every event. Mirrors getChat's single-chat path.
+func (s *Server) hydrateChatForWSEvent(chatID string) (compatRecord, error) {
+	cli := s.rt.Client()
+	if cli == nil {
+		return nil, nil
+	}
+	ctx := context.Background()
+	roomID := id.RoomID(chatID)
+	room, err := cli.DB.Room.Get(ctx, roomID)
+	if err != nil || room == nil {
+		return nil, err
+	}
+	lookup, err := s.buildAccountLookup(ctx)
+	if err != nil {
+		return nil, err
+	}
+	roomStates, err := s.loadRoomAccountDataStates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	lastReadKey := s.loadLastReadSortKey(ctx, roomID)
+	chat, err := s.mapRoomToChat(ctx, room, lookup, chatPreviewParticipants, true, roomStates[roomID], lastReadKey)
+	if err != nil {
+		return nil, err
+	}
+	return toCompatRecord(chat)
+}
+
+func (s *Server) hydrateReceiptForWSEvent(chatID string) (compatRecord, error) {
+	roomID := id.RoomID(chatID)
+	otherReceipts, err := s.loadOtherReadReceipts(context.Background(), roomID)
+	if err != nil {
+		return nil, err
+	}
+	maxRead := computeMaxOtherRead(otherReceipts)
+	if maxRead == 0 {
+		return nil, nil
+	}
+	return compatRecord{
+		"chatID":                 chatID,
+		"lastReadByOtherSortKey": strconv.FormatInt(maxRead, 10),
+	}, nil
 }
 
 func toCompatRecord(value any) (compatRecord, error) {
@@ -478,12 +674,14 @@ func (s *Server) wsEvents(w http.ResponseWriter, r *http.Request) error {
 		if readErr != nil {
 			return nil
 		}
-		if messageType != websocket.MessageText {
+		// Accept both text and binary messages — some clients (e.g., Apple's
+		// URLSessionWebSocketTask) send JSON payloads as binary (.data) frames.
+		if messageType != websocket.MessageText && messageType != websocket.MessageBinary {
 			ctx, cancel := context.WithTimeout(context.Background(), wsDefaultWriteTimeout)
 			_ = wsjson.Write(ctx, conn, wsErrorMessage{
 				Type:    wsErrorType,
 				Code:    wsErrorCodeInvalidPayload,
-				Message: "Payload must be a JSON text message",
+				Message: "Payload must be a JSON text or binary message",
 			})
 			cancel()
 			continue
@@ -703,7 +901,8 @@ func mapSyncCompleteToDomainEvents(syncComplete *jsoncmd.SyncComplete) []wsDomai
 				if evt.ID != "" {
 					messageDeletedIDs[string(evt.ID)] = struct{}{}
 				}
-			case evtType == event.EventMessage.Type || evtType == event.EventSticker.Type || evtType == event.EventReaction.Type:
+			case evtType == event.EventMessage.Type || evtType == event.EventSticker.Type ||
+				evtType == event.EventReaction.Type || evtType == event.StateMember.Type:
 				chatTouched = true
 				targetID := string(evt.ID)
 				if evtType == event.EventReaction.Type && evt.RelatesTo != "" {
@@ -722,6 +921,16 @@ func mapSyncCompleteToDomainEvents(syncComplete *jsoncmd.SyncComplete) []wsDomai
 				evtType == event.StateTopic.Type:
 				chatTouched = true
 			}
+		}
+
+		// Emit receipt.updated if new receipts arrived.
+		if len(roomSync.Receipts) > 0 {
+			output = append(output, wsDomainEvent{
+				Type:   wsDomainTypeReceiptUpdated,
+				ChatID: chatID,
+				IDs:    []string{chatID},
+			})
+			chatTouched = true
 		}
 
 		if chatTouched {

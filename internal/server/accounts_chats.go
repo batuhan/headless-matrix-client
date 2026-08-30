@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,9 +20,9 @@ import (
 )
 
 const (
-	localBridgeStateEventType = "com.beeper.local_bridge_state"
-	chatPageSize              = 25
-	chatPreviewParticipants   = 5
+	bridgeStateEventType    = "com.beeper.bridge_state"
+	chatPageSize            = 25
+	chatPreviewParticipants = 5
 )
 
 const roomSelectBaseQuery = `
@@ -35,17 +36,26 @@ const roomSelectBaseQuery = `
 const roomSelectSortedQuery = roomSelectBaseQuery + `WHERE sorting_timestamp > 0 AND room_type<>'m.space' ORDER BY sorting_timestamp DESC, room_id ASC`
 const roomAccountDataSelectQuery = `SELECT room_id, type, content FROM room_account_data WHERE user_id = $1`
 
-type localBridgeDeviceState struct {
-	State string `json:"state"`
+// bridgeStateContent matches the com.beeper.bridge_state account data event.
+type bridgeStateContent struct {
+	Bridges map[string]bridgeEntry `json:"bridges"`
 }
 
-type localBridgeAccount struct {
-	State       string                            `json:"state"`
-	ProfileData map[string]any                    `json:"profile_data,omitempty"`
-	Devices     map[string]localBridgeDeviceState `json:"devices,omitempty"`
+type bridgeEntry struct {
+	BridgeState bridgeRunState               `json:"bridgeState"`
+	RemoteState map[string]bridgeRemoteState `json:"remoteState"`
 }
 
-type localBridgeStateContent map[string]map[string]localBridgeAccount
+type bridgeRunState struct {
+	StateEvent string `json:"stateEvent"`
+}
+
+type bridgeRemoteState struct {
+	RemoteID      string         `json:"remote_id"`
+	RemoteName    string         `json:"remote_name"`
+	RemoteProfile map[string]any `json:"remote_profile"`
+	StateEvent    string         `json:"state_event"`
+}
 
 type accountLookup struct {
 	Accounts []compat.Account
@@ -146,6 +156,33 @@ func (s *Server) getAccounts(w http.ResponseWriter, r *http.Request) error {
 	return writeJSON(w, accounts)
 }
 
+func (s *Server) getSession(w http.ResponseWriter, r *http.Request) error {
+	accounts, err := s.loadAccounts(r.Context())
+	if err != nil {
+		return err
+	}
+
+	cli := s.rt.Client()
+	user := newCompatUser(userShape{ID: string(cli.Account.UserID), IsSelf: true})
+	for _, account := range accounts {
+		if account.User.IsSelf && account.User.FullName != "" && account.User.FullName != account.User.ID {
+			user = account.User
+			break
+		}
+	}
+	if profile, profileErr := cli.Client.GetProfile(r.Context(), cli.Account.UserID); profileErr == nil && profile != nil &&
+		(strings.TrimSpace(profile.DisplayName) != "" || !profile.AvatarURL.IsEmpty()) {
+		user = newCompatUser(userShape{
+			ID:       string(cli.Account.UserID),
+			FullName: profile.DisplayName,
+			ImgURL:   profile.AvatarURL.String(),
+			IsSelf:   true,
+		})
+	}
+
+	return writeJSON(w, compat.SessionOutput{User: user, Accounts: accounts})
+}
+
 func (s *Server) buildAccountLookup(ctx context.Context) (*accountLookup, error) {
 	accounts, err := s.loadAccounts(ctx)
 	if err != nil {
@@ -177,52 +214,67 @@ func (s *Server) loadAccounts(ctx context.Context) ([]compat.Account, error) {
 		return nil, errs.Internal(fmt.Errorf("failed to read global account data: %w", err))
 	}
 
-	var state localBridgeStateContent
+	var state bridgeStateContent
 	for _, ad := range accountDataEvents {
-		if ad.Type != localBridgeStateEventType {
+		if ad.Type != bridgeStateEventType {
 			continue
 		}
 		if len(ad.Content) == 0 {
 			continue
 		}
 		if err = json.Unmarshal(ad.Content, &state); err != nil {
-			return nil, errs.Internal(fmt.Errorf("failed to parse %s: %w", localBridgeStateEventType, err))
+			return nil, errs.Internal(fmt.Errorf("failed to parse %s: %w", bridgeStateEventType, err))
 		}
 		break
 	}
 
 	accounts := make([]compat.Account, 0)
-	currentDeviceID := string(cli.Account.DeviceID)
 
-	bridgeIDs := make([]string, 0, len(state))
-	for bridgeID := range state {
+	bridgeIDs := make([]string, 0, len(state.Bridges))
+	for bridgeID := range state.Bridges {
 		bridgeIDs = append(bridgeIDs, bridgeID)
 	}
 	sort.Strings(bridgeIDs)
 
 	for _, bridgeID := range bridgeIDs {
-		accountsByRemote := state[bridgeID]
-		remoteIDs := make([]string, 0, len(accountsByRemote))
-		for remoteID := range accountsByRemote {
+		entry := state.Bridges[bridgeID]
+		// Skip bridges that are not running.
+		if strings.ToUpper(entry.BridgeState.StateEvent) != "RUNNING" {
+			continue
+		}
+		remoteIDs := make([]string, 0, len(entry.RemoteState))
+		for remoteID := range entry.RemoteState {
 			remoteIDs = append(remoteIDs, remoteID)
 		}
 		sort.Strings(remoteIDs)
 
 		for _, remoteID := range remoteIDs {
-			bridgeAccount := accountsByRemote[remoteID]
-			if !isConfiguredLocalAccount(bridgeAccount, currentDeviceID) {
+			remote := entry.RemoteState[remoteID]
+			remoteStateUpper := strings.ToUpper(remote.StateEvent)
+			if remoteStateUpper == "DELETED" || remoteStateUpper == "LOGGED_OUT" {
 				continue
 			}
 
-			desktopAccountID := bridgeID + "_" + remoteID
 			network := networkFromBridgeID(bridgeID)
 			accounts = append(accounts, compat.Account{
-				AccountID: desktopAccountID,
+				AccountID: bridgeID,
 				Network:   network,
-				User:      userFromLocalBridgeProfile(remoteID, bridgeAccount.ProfileData),
+				User:      userFromLocalBridgeProfile(remoteID, remote.RemoteProfile),
 			})
 		}
 	}
+
+	// Also add the matrix account itself as "hungryserv".
+	matrixUser := newCompatUser(userShape{ID: string(cli.Account.UserID), IsSelf: true})
+	// Try to get the display name from the profile.
+	if profile, profileErr := cli.DB.CurrentState.Get(ctx, id.RoomID(""), event.StateRoomName, ""); profileErr == nil && profile != nil {
+		_ = profile // Not needed for global profile.
+	}
+	accounts = append([]compat.Account{{
+		AccountID: "hungryserv",
+		Network:   "Beeper (Matrix)",
+		User:      matrixUser,
+	}}, accounts...)
 
 	if len(accounts) == 0 {
 		accounts = append(accounts, compat.Account{
@@ -232,33 +284,32 @@ func (s *Server) loadAccounts(ctx context.Context) ([]compat.Account, error) {
 		})
 	}
 
+	for index := range accounts {
+		networkID := bridgeIDFromAccountID(accounts[index].AccountID)
+		if networkID == "" {
+			networkID = "matrix"
+		}
+		accounts[index].NetworkID = networkID
+		accounts[index].Capabilities = capabilitiesForNetwork(networkID)
+	}
+
 	return accounts, nil
 }
 
-func isConfiguredLocalAccount(account localBridgeAccount, deviceID string) bool {
-	state := strings.ToUpper(strings.TrimSpace(account.State))
-	if state == "" || state == "DELETED" {
-		return false
+func capabilitiesForNetwork(networkID string) compat.AccountCapabilities {
+	normalized := strings.TrimSuffix(strings.TrimPrefix(networkID, "local-"), "go")
+	return compat.AccountCapabilities{
+		UnlimitedMessageEdits: normalized == "telegram",
 	}
-	if deviceID == "" {
-		return true
-	}
-	if len(account.Devices) == 0 {
-		return false
-	}
-	deviceState, ok := account.Devices[deviceID]
-	if !ok {
-		return false
-	}
-	status := strings.ToUpper(strings.TrimSpace(deviceState.State))
-	return status != "DELETED" && status != "LOGGED_OUT"
 }
 
 func bridgeIDFromAccountID(accountID string) string {
-	if idx := strings.Index(accountID, "_"); idx > 0 {
-		return accountID[:idx]
+	// Account IDs are now the bridge name directly (e.g., "whatsapp", "discordgo").
+	// The hungryserv account is the Matrix account itself.
+	if accountID == "hungryserv" || accountID == "" {
+		return ""
 	}
-	return ""
+	return accountID
 }
 
 func (s *Server) listChats(w http.ResponseWriter, r *http.Request) error {
@@ -283,6 +334,9 @@ func (s *Server) listChats(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
+	readKeys, _ := s.loadLastReadSortKeys(r.Context())
+
+	inbox := strings.TrimSpace(r.URL.Query().Get("inbox"))
 
 	items := make([]compat.Chat, 0, chatPageSize+1)
 	for _, room := range rooms {
@@ -294,7 +348,28 @@ func (s *Server) listChats(w http.ResponseWriter, r *http.Request) error {
 				continue
 			}
 		}
-		chat, mapErr := s.mapRoomToChat(r.Context(), room, lookup, chatPreviewParticipants, true, roomStates[room.ID])
+		state := roomStates[room.ID]
+		if inbox != "" {
+			switch inbox {
+			case "primary":
+				if state.EffectiveArchived() || state.IsLowPriority {
+					continue
+				}
+			case "low-priority":
+				if !state.IsLowPriority {
+					continue
+				}
+			case "archive":
+				if !state.EffectiveArchived() {
+					continue
+				}
+			case "unread":
+				if room.UnreadMessages <= 0 && !state.IsMarkedUnread {
+					continue
+				}
+			}
+		}
+		chat, mapErr := s.mapRoomToChat(r.Context(), room, lookup, chatPreviewParticipants, true, state, readKeys[room.ID])
 		if mapErr != nil {
 			continue
 		}
@@ -358,7 +433,8 @@ func (s *Server) getChat(w http.ResponseWriter, r *http.Request) error {
 	if err != nil {
 		return err
 	}
-	chat, err := s.mapRoomToChat(r.Context(), room, lookup, maxParticipants, true, roomStates[room.ID])
+	lastReadKey := s.loadLastReadSortKey(r.Context(), room.ID)
+	chat, err := s.mapRoomToChat(r.Context(), room, lookup, maxParticipants, true, roomStates[room.ID], lastReadKey)
 	if err != nil {
 		return err
 	}
@@ -421,6 +497,60 @@ func (s *Server) loadRoomAccountDataStates(ctx context.Context) (map[id.RoomID]r
 	return states, nil
 }
 
+const readReceiptQuery = `SELECT event_id FROM receipt WHERE room_id = ? AND user_id = ? AND receipt_type = 'm.read' LIMIT 1`
+const timelineRowIDForEventQuery = `SELECT timeline.rowid FROM timeline JOIN event ON event.rowid = timeline.event_rowid WHERE timeline.room_id = ? AND event.event_id = ? LIMIT 1`
+
+// loadLastReadSortKey returns the timeline rowid of the self-user's last read receipt for a room.
+func (s *Server) loadLastReadSortKey(ctx context.Context, roomID id.RoomID) string {
+	cli := s.rt.Client()
+	if cli == nil || cli.Account == nil {
+		return ""
+	}
+	var eventID string
+	err := cli.DB.QueryRow(ctx, readReceiptQuery, roomID, cli.Account.UserID).Scan(&eventID)
+	if err != nil || eventID == "" {
+		return ""
+	}
+	var timelineRowID int64
+	err = cli.DB.QueryRow(ctx, timelineRowIDForEventQuery, roomID, eventID).Scan(&timelineRowID)
+	if err != nil || timelineRowID <= 0 {
+		return ""
+	}
+	return strconv.FormatInt(timelineRowID, 10)
+}
+
+// loadLastReadSortKeys loads read receipt sort keys for all rooms at once.
+func (s *Server) loadLastReadSortKeys(ctx context.Context) (map[id.RoomID]string, error) {
+	cli := s.rt.Client()
+	if cli == nil || cli.Account == nil {
+		return map[id.RoomID]string{}, nil
+	}
+	const batchQuery = `
+		SELECT r.room_id, t.rowid
+		FROM receipt r
+		JOIN event e ON e.event_id = r.event_id AND e.room_id = r.room_id
+		JOIN timeline t ON t.event_rowid = e.rowid AND t.room_id = r.room_id
+		WHERE r.user_id = ? AND r.receipt_type = 'm.read'
+	`
+	rows, err := cli.DB.Query(ctx, batchQuery, cli.Account.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[id.RoomID]string)
+	for rows.Next() {
+		var roomIDRaw string
+		var timelineRowID int64
+		if scanErr := rows.Scan(&roomIDRaw, &timelineRowID); scanErr != nil {
+			continue
+		}
+		if timelineRowID > 0 {
+			result[id.RoomID(roomIDRaw)] = strconv.FormatInt(timelineRowID, 10)
+		}
+	}
+	return result, rows.Err()
+}
+
 func roomIsOlderThanCursor(room *database.Room, c *cursor.ChatCursor) bool {
 	ts := room.SortingTimestamp.UnixMilli()
 	if ts < c.TS {
@@ -449,9 +579,20 @@ func roomIsNewerThanCursor(room *database.Room, c *cursor.ChatCursor) bool {
 	return string(room.ID) < c.RoomID
 }
 
-func (s *Server) mapRoomToChat(ctx context.Context, room *database.Room, lookup *accountLookup, maxParticipants int, includePreview bool, roomState roomAccountDataState) (compat.Chat, error) {
+func (s *Server) mapRoomToChat(ctx context.Context, room *database.Room, lookup *accountLookup, maxParticipants int, includePreview bool, roomState roomAccountDataState, lastReadSortKey ...string) (compat.Chat, error) {
 	accountID, network := inferAccountForRoom(room.ID, lookup)
 	participants, total := s.loadRoomParticipants(ctx, room)
+
+	// If inferAccountForRoom fell through to fallback, try member-based inference.
+	selfUserID := ""
+	if cli := s.rt.Client(); cli != nil && cli.Account != nil {
+		selfUserID = string(cli.Account.UserID)
+	}
+	if memberAccountID, memberNetwork, ok := inferAccountFromMembers(participants, selfUserID, lookup); ok {
+		accountID = memberAccountID
+		network = memberNetwork
+	}
+
 	filteredParticipants := participants
 	hasMoreParticipants := false
 	if maxParticipants >= 0 && len(filteredParticipants) > maxParticipants {
@@ -473,6 +614,11 @@ func (s *Server) mapRoomToChat(ctx context.Context, room *database.Room, lookup 
 	chat.AccountID = accountID
 	chat.Title = title
 	chat.Type = compat.ChatType(chatType)
+	if room.Avatar != nil {
+		if avatarURL := room.Avatar.String(); avatarURL != "" && avatarURL != "mxc://" {
+			chat.ImgURL = avatarURL
+		}
+	}
 	chat.Participants = compat.Participants{
 		Items:   filteredParticipants,
 		HasMore: hasMoreParticipants,
@@ -500,9 +646,45 @@ func (s *Server) mapRoomToChat(ctx context.Context, room *database.Room, lookup 
 		chat.LastActivity = time.UnixMilli(ts).UTC()
 	}
 
+	// Set localChatID to room ID (matches reference server behavior).
+	chat.LocalChatID = string(room.ID)
+
+	// Set lastReadMessageSortKey from read receipts.
+	if len(lastReadSortKey) > 0 && lastReadSortKey[0] != "" {
+		chat.LastReadMessageSortKey = lastReadSortKey[0]
+	}
+
 	if includePreview && room.PreviewEventRowID > 0 {
 		if previewEvt, err := s.rt.Client().DB.Event.GetByRowID(ctx, room.PreviewEventRowID); err == nil && previewEvt != nil {
-			if preview, mapErr := s.mapEventToMessage(ctx, previewEvt, room, lookup, reactionBundle{}); mapErr == nil {
+			// Preview hydration must resolve edits just like timeline and realtime
+			// hydration, otherwise an edited last message leaves stale sidebar text.
+			if editErr := s.populateLastEditRefs(ctx, []*database.Event{previewEvt}); editErr != nil {
+				return compat.Chat{}, editErr
+			}
+			memberNames := s.loadMemberNameMap(ctx, room.ID)
+			if preview, mapErr := s.mapEventToMessage(ctx, previewEvt, room, lookup, reactionBundle{Names: memberNames}); mapErr == nil {
+				// Fix preview sortKey: GetByRowID returns TimelineRowID=-1.
+				// Look up actual timeline rowid.
+				if preview.SortKey == "-1" || preview.SortKey == "0" {
+					var tlRowID int64
+					_ = s.rt.Client().DB.QueryRow(ctx, timelineRowIDForEventQuery, room.ID, previewEvt.ID).Scan(&tlRowID)
+					if tlRowID > 0 {
+						preview.SortKey = strconv.FormatInt(tlRowID, 10)
+					}
+				}
+				// Set isUnread based on lastReadMessageSortKey or unreadCount.
+				if !preview.IsSender {
+					if chat.LastReadMessageSortKey != "" {
+						lastRead, _ := strconv.ParseInt(chat.LastReadMessageSortKey, 10, 64)
+						previewSort, _ := strconv.ParseInt(preview.SortKey, 10, 64)
+						if previewSort > lastRead {
+							preview.IsUnread = true
+						}
+					} else if chat.UnreadCount > 0 {
+						// No receipt but room has unread messages.
+						preview.IsUnread = true
+					}
+				}
 				chat.Preview = &preview
 			}
 		}
@@ -536,6 +718,10 @@ func (s *Server) loadRoomParticipants(ctx context.Context, room *database.Room) 
 		if _, ok := seen[userID]; ok {
 			continue
 		}
+		// Filter out bridge bot users (e.g., @whatsappbot:beeper.local).
+		if isBridgeBot(userID) {
+			continue
+		}
 		seen[userID] = struct{}{}
 		users = append(users, userFromMemberEvent(userID, content, string(cli.Account.UserID)))
 	}
@@ -559,30 +745,75 @@ func inferAccountForRoom(roomID id.RoomID, lookup *accountLookup) (string, strin
 	for bridgeID := range lookup.ByBridge {
 		bridgeIDs = append(bridgeIDs, bridgeID)
 	}
+	// Sort longest first for best match.
 	sort.Slice(bridgeIDs, func(i, j int) bool {
 		return len(bridgeIDs[i]) > len(bridgeIDs[j])
 	})
 
 	for _, bridgeID := range bridgeIDs {
-		idx := strings.Index(server, bridgeID)
-		if idx < 0 {
-			continue
-		}
-		prefix := strings.Trim(server[:idx], "._-")
-		if prefix != "" {
-			candidate := bridgeID + "_" + prefix
-			if account, ok := lookup.ByID[candidate]; ok {
-				return account.AccountID, account.Network
+		if strings.Contains(server, bridgeID) {
+			accounts := lookup.ByBridge[bridgeID]
+			if len(accounts) > 0 {
+				return accounts[0].AccountID, accounts[0].Network
 			}
-		}
-		accounts := lookup.ByBridge[bridgeID]
-		if len(accounts) > 0 {
-			return accounts[0].AccountID, accounts[0].Network
 		}
 	}
 
+	// If not matched by server part, store roomID for member-based inference
+	// (done in mapRoomToChat after loading participants).
 	fallback := lookup.Accounts[0]
 	return fallback.AccountID, fallback.Network
+}
+
+// inferAccountFromMembers inspects room member user IDs to determine the bridge.
+// Bridge ghost user IDs follow the pattern @<bridgeName>_<remoteID>:<server>.
+func inferAccountFromMembers(participants []compat.User, selfUserID string, lookup *accountLookup) (string, string, bool) {
+	if lookup == nil {
+		return "", "", false
+	}
+	bridgeIDs := make([]string, 0, len(lookup.ByBridge))
+	for bridgeID := range lookup.ByBridge {
+		bridgeIDs = append(bridgeIDs, bridgeID)
+	}
+	// Sort longest first for best match.
+	sort.Slice(bridgeIDs, func(i, j int) bool {
+		return len(bridgeIDs[i]) > len(bridgeIDs[j])
+	})
+
+	for _, p := range participants {
+		if p.ID == selfUserID || p.IsSelf {
+			continue
+		}
+		// Ghost user IDs: @bridgeName_remoteID:server
+		localpart := p.ID
+		if strings.HasPrefix(localpart, "@") {
+			localpart = localpart[1:]
+		}
+		if idx := strings.Index(localpart, ":"); idx > 0 {
+			localpart = localpart[:idx]
+		}
+		for _, bridgeID := range bridgeIDs {
+			if strings.HasPrefix(localpart, bridgeID+"_") {
+				accounts := lookup.ByBridge[bridgeID]
+				if len(accounts) > 0 {
+					return accounts[0].AccountID, accounts[0].Network, true
+				}
+			}
+		}
+	}
+	return "", "", false
+}
+
+// isBridgeBot returns true if the user ID looks like a bridge bot (e.g., @whatsappbot:beeper.local).
+func isBridgeBot(userID string) bool {
+	localpart := userID
+	if strings.HasPrefix(localpart, "@") {
+		localpart = localpart[1:]
+	}
+	if idx := strings.Index(localpart, ":"); idx > 0 {
+		localpart = localpart[:idx]
+	}
+	return strings.HasSuffix(localpart, "bot")
 }
 
 func roomServerPart(roomID string) string {
@@ -634,7 +865,7 @@ func networkFromBridgeID(bridgeID string) string {
 		return "Telegram"
 	case "twitter":
 		return "Twitter/X"
-	case "instagram":
+	case "instagram", "instagramgo":
 		return "Instagram"
 	case "signal":
 		return "Signal"
@@ -645,7 +876,7 @@ func networkFromBridgeID(bridgeID string) string {
 	case "slackgo", "slack":
 		return "Slack"
 	case "facebookgo", "facebook":
-		return "Facebook"
+		return "Facebook/Messenger"
 	case "gmessages":
 		return "Google Messages"
 	case "gvoice":

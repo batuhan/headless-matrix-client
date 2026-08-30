@@ -15,6 +15,7 @@ type Middleware struct {
 	token               string
 	allowQueryTokenAuth bool
 	tokenInfoProvider   func(string) (*mcpauth.TokenInfo, bool)
+	assetTokenResolver  func(string, string) (string, bool)
 }
 
 func New(token string, allowQueryTokenAuth bool) *Middleware {
@@ -23,6 +24,10 @@ func New(token string, allowQueryTokenAuth bool) *Middleware {
 
 func (m *Middleware) SetTokenInfoProvider(provider func(string) (*mcpauth.TokenInfo, bool)) {
 	m.tokenInfoProvider = provider
+}
+
+func (m *Middleware) SetAssetTokenResolver(resolver func(string, string) (string, bool)) {
+	m.assetTokenResolver = resolver
 }
 
 func (m *Middleware) Wrap(next http.Handler, allowQueryToken bool, requiredScopes []string) http.Handler {
@@ -47,6 +52,13 @@ func (m *Middleware) Wrap(next http.Handler, allowQueryToken bool, requiredScope
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		token := parseToken(r, allowQueryToken && m.allowQueryTokenAuth)
+		if token == "" && r.Method == http.MethodGet && r.URL.Path == "/v1/assets/serve" {
+			signature := strings.TrimSpace(r.URL.Query().Get("assetAccessSignature"))
+			assetURL := strings.TrimSpace(r.URL.Query().Get("url"))
+			if m.assetTokenResolver != nil && signature != "" && assetURL != "" {
+				token, _ = m.assetTokenResolver(signature, assetURL)
+			}
+		}
 		if token != "" {
 			r = withBearerToken(r, token)
 		}

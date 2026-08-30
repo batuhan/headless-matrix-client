@@ -1,11 +1,16 @@
 import type { BeeperDesktop } from "@beeper/desktop-api";
 
+export type Message = BeeperDesktop.Message & {
+  /** True when this message has been deleted, even if its locally retained content is present. */
+  isDeleted?: boolean;
+};
+
 export interface CompatibleRouteTypes {
   "accounts.list": BeeperDesktop.AccountListResponse;
   "chats.list": BeeperDesktop.ChatListResponse;
   "chats.search": BeeperDesktop.ChatsCursorSearch;
-  "messages.list": BeeperDesktop.CursorNoLimitResponse<BeeperDesktop.Message>;
-  "messages.search": BeeperDesktop.CursorSearchResponse<BeeperDesktop.Message>;
+  "messages.list": BeeperDesktop.CursorNoLimitResponse<Message>;
+  "messages.search": BeeperDesktop.CursorSearchResponse<Message>;
   "messages.send": BeeperDesktop.MessageSendResponse;
   "assets.download": BeeperDesktop.AssetDownloadResponse;
   "focus": BeeperDesktop.FocusResponse;

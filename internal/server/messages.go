@@ -23,7 +23,7 @@ import (
 )
 
 const (
-	messagePageSize = 20
+	messagePageSize = 40
 )
 
 const timelineSelectBase = `
@@ -66,6 +66,12 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) error {
 		return errs.NotFound("Chat not found")
 	}
 
+	lastReadKey := s.loadLastReadSortKey(r.Context(), id.RoomID(chatID))
+	var lastReadInt int64
+	if lastReadKey != "" {
+		lastReadInt, _ = strconv.ParseInt(lastReadKey, 10, 64)
+	}
+
 	messages := make([]compat.Message, 0, messagePageSize+1)
 	var hasMore bool
 	nextCursor := cursorValue
@@ -101,6 +107,13 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) error {
 			if mapErr != nil {
 				continue
 			}
+			// Mark messages as unread based on read receipt.
+			if lastReadInt > 0 && !mapped.IsSender {
+				sortKeyInt, _ := strconv.ParseInt(mapped.SortKey, 10, 64)
+				if sortKeyInt > lastReadInt {
+					mapped.IsUnread = true
+				}
+			}
 			messages = append(messages, mapped)
 			if len(messages) > messagePageSize {
 				break
@@ -117,7 +130,22 @@ func (s *Server) listMessages(w http.ResponseWriter, r *http.Request) error {
 		messages = messages[:messagePageSize]
 		hasMore = true
 	}
-	return writeJSON(w, compat.ListMessagesOutput{Items: messages, HasMore: hasMore})
+
+	// Load other participants' read receipts to determine the "read by other" position.
+	var lastReadByOtherSortKey string
+	otherReceipts, _ := s.loadOtherReadReceipts(r.Context(), id.RoomID(chatID))
+	if len(otherReceipts) > 0 {
+		maxOtherRead := computeMaxOtherRead(otherReceipts)
+		if maxOtherRead != 0 {
+			lastReadByOtherSortKey = strconv.FormatInt(maxOtherRead, 10)
+		}
+	}
+
+	return writeJSON(w, compat.ListMessagesOutput{
+		Items:                  messages,
+		HasMore:                hasMore,
+		LastReadByOtherSortKey: lastReadByOtherSortKey,
+	})
 }
 
 func (s *Server) sendMessage(w http.ResponseWriter, r *http.Request) error {
@@ -484,18 +512,36 @@ func (s *Server) loadReactionMap(ctx context.Context, roomID id.RoomID, events [
 }
 
 func (s *Server) mapEventToMessage(ctx context.Context, evt *database.Event, room *database.Room, lookup *accountLookup, reactions reactionBundle) (compat.Message, error) {
-	if evt == nil || evt.RedactedBy != "" {
+	if evt == nil {
 		return compat.Message{}, errSkipEvent
 	}
 	evtType := evt.GetType().Type
 	if evt.RelationType == event.RelReplace {
 		return compat.Message{}, errSkipEvent
 	}
-	if evtType != event.EventMessage.Type && evtType != event.EventSticker.Type && evtType != event.EventReaction.Type {
+	if evtType != event.EventMessage.Type && evtType != event.EventSticker.Type &&
+		evtType != event.EventReaction.Type && evtType != event.StateMember.Type {
 		return compat.Message{}, errSkipEvent
 	}
 
 	accountID, _ := inferAccountForRoom(room.ID, lookup)
+	// Try member-based inference if server part didn't match.
+	if accountID == "hungryserv" || accountID == "" {
+		if reactions.Names != nil {
+			// Build minimal participant list from names map for inference.
+			tempParticipants := make([]compat.User, 0, len(reactions.Names))
+			selfUserID := ""
+			if cli := s.rt.Client(); cli != nil && cli.Account != nil {
+				selfUserID = string(cli.Account.UserID)
+			}
+			for uid := range reactions.Names {
+				tempParticipants = append(tempParticipants, compat.User{ID: uid, IsSelf: uid == selfUserID})
+			}
+			if memberAccID, _, ok := inferAccountFromMembers(tempParticipants, selfUserID, lookup); ok {
+				accountID = memberAccID
+			}
+		}
+	}
 	message := compat.Message{
 		ID:        string(evt.ID),
 		ChatID:    string(evt.RoomID),
@@ -504,6 +550,7 @@ func (s *Server) mapEventToMessage(ctx context.Context, evt *database.Event, roo
 		Timestamp: evt.Timestamp.Time.UTC(),
 		SortKey:   messageSortKey(evt),
 		IsSender:  evt.Sender == s.rt.Client().Account.UserID,
+		IsDeleted: evt.RedactedBy != "",
 		Reactions: reactions.Reactions[evt.ID],
 	}
 	if name, ok := reactions.Names[string(evt.Sender)]; ok {
@@ -516,6 +563,36 @@ func (s *Server) mapEventToMessage(ctx context.Context, evt *database.Event, roo
 	}
 
 	switch evtType {
+	case event.StateMember.Type:
+		var member event.MemberEventContent
+		if err := json.Unmarshal(evt.GetContent(), &member); err != nil {
+			return compat.Message{}, errSkipEvent
+		}
+		switch member.Membership {
+		case event.MembershipJoin:
+			message.Type = compat.MessageType("MEMBER_JOIN")
+		case event.MembershipInvite:
+			message.Type = compat.MessageType("MEMBER_INVITE")
+		default:
+			return compat.Message{}, errSkipEvent
+		}
+		if evt.StateKey != nil && strings.TrimSpace(*evt.StateKey) != "" {
+			message.SenderID = *evt.StateKey
+			message.IsSender = message.SenderID == string(s.rt.Client().Account.UserID)
+		}
+		if name, ok := reactions.Names[message.SenderID]; ok {
+			message.SenderName = name
+		} else if strings.TrimSpace(member.Displayname) != "" {
+			message.SenderName = member.Displayname
+		} else {
+			message.SenderName = message.SenderID
+		}
+		if message.Type == compat.MessageType("MEMBER_JOIN") {
+			message.Text = message.SenderName + " joined the chat"
+		} else {
+			message.Text = message.SenderName + " was invited to the chat"
+		}
+		return message, nil
 	case event.EventReaction.Type:
 		var reaction event.ReactionEventContent
 		if err := json.Unmarshal(evt.GetContent(), &reaction); err == nil {
@@ -527,22 +604,50 @@ func (s *Server) mapEventToMessage(ctx context.Context, evt *database.Event, roo
 		}
 		return message, nil
 	case event.EventSticker.Type, event.EventMessage.Type:
-		var content event.MessageEventContent
-		if err := json.Unmarshal(evt.GetContent(), &content); err != nil {
+		if err := applyStoredMessageContent(&message, evt, evtType); err != nil {
 			return compat.Message{}, errSkipEvent
-		}
-		message.Type = mapMessageType(evtType, content.MsgType)
-		message.Text = content.Body
-		if message.Text == "" && evt.LocalContent != nil {
-			message.Text = evt.LocalContent.SanitizedHTML
-		}
-		if att, ok := messageAttachment(content, evtType); ok {
-			message.Attachments = []compat.Attachment{att}
 		}
 		return message, nil
 	default:
 		return compat.Message{}, errSkipEvent
 	}
+}
+
+func applyStoredMessageContent(message *compat.Message, evt *database.Event, evtType string) error {
+	var content event.MessageEventContent
+	if err := json.Unmarshal(evt.GetContent(), &content); err != nil {
+		return err
+	}
+	// Matrix replies and bridged per-message profiles may include compatibility
+	// fallback text in Body. Relay renders those structures separately, so
+	// forwarding the fallback duplicates quoted text and any URLs it contains.
+	content.RemoveReplyFallback()
+	content.RemovePerMessageProfileFallback()
+
+	message.Type = mapMessageType(evtType, content.MsgType)
+	if content.Mentions != nil {
+		message.Mentions = make([]string, 0, len(content.Mentions.UserIDs)+1)
+		for _, userID := range content.Mentions.UserIDs {
+			if userID != "" {
+				message.Mentions = append(message.Mentions, string(userID))
+			}
+		}
+		if content.Mentions.Room {
+			message.Mentions = append(message.Mentions, "@room")
+		}
+	}
+	if attachment, ok := messageAttachment(content, evtType); ok {
+		message.Attachments = []compat.Attachment{attachment}
+		// Matrix requires a Body for media and commonly fills it with the
+		// filename. GetCaption returns only actual authored caption text.
+		message.Text = content.GetCaption()
+	} else {
+		message.Text = content.Body
+		if message.Text == "" && evt.LocalContent != nil {
+			message.Text = evt.LocalContent.SanitizedHTML
+		}
+	}
+	return nil
 }
 
 func mapMessageType(evtType string, msgType event.MessageType) compat.MessageType {
@@ -577,8 +682,14 @@ func messageAttachment(content event.MessageEventContent, evtType string) (compa
 		return compat.Attachment{}, false
 	}
 	uri := string(content.URL)
-	if uri == "" && content.File != nil {
-		uri = string(content.File.URL)
+	if content.File != nil {
+		if uri == "" {
+			uri = string(content.File.URL)
+		}
+		// Register the encryption info so the asset serve endpoint can decrypt.
+		// Note: some events have both content.URL and content.File set to the
+		// same mxc:// URL (e.g. own outbound messages in encrypted rooms).
+		registerEncryptedFile(uri, content.File)
 	}
 	att := compat.Attachment{
 		ID:       uri,
@@ -608,6 +719,7 @@ func messageAttachment(content event.MessageEventContent, evtType string) (compa
 		att.Type = compat.AttachmentType("video")
 	case event.MsgAudio:
 		att.Type = compat.AttachmentType("audio")
+		att.IsVoiceNote = content.MSC3245Voice != nil
 	case "m.sticker":
 		att.Type = compat.AttachmentType("img")
 		att.IsSticker = true
@@ -714,4 +826,26 @@ func messageTypeFromAttachment(mimeType, hint string) event.MessageType {
 		return event.MsgAudio
 	}
 	return event.MsgFile
+}
+
+func (s *Server) deleteMessage(w http.ResponseWriter, r *http.Request) error {
+	chatID := readChatID(r, "")
+	if chatID == "" {
+		return errs.Validation(map[string]any{"chatID": "chatID is required"})
+	}
+	messageID := readMessageID(r, "")
+	if messageID == "" {
+		return errs.Validation(map[string]any{"messageID": "messageID is required"})
+	}
+
+	cli := s.rt.Client()
+	roomID := id.RoomID(chatID)
+	eventID := id.EventID(messageID)
+
+	_, err := cli.Client.RedactEvent(r.Context(), roomID, eventID, mautrix.ReqRedact{})
+	if err != nil {
+		return errs.Internal(fmt.Errorf("failed to redact event: %w", err))
+	}
+
+	return writeJSON(w, map[string]any{"success": true})
 }

@@ -10,3 +10,4 @@ state/
 
 # IDE
 .DS_Store
+/server

@@ -1159,6 +1159,7 @@ func (s *Server) searchChatsCore(ctx context.Context, params searchChatsParams) 
 	if err != nil {
 		return compat.SearchChatsOutput{}, err
 	}
+	readKeys, _ := s.loadLastReadSortKeys(ctx)
 
 	items := make([]compat.Chat, 0, params.Limit+1)
 	for _, room := range rooms {
@@ -1188,10 +1189,16 @@ func (s *Server) searchChatsCore(ctx context.Context, params searchChatsParams) 
 				if !state.EffectiveArchived() {
 					continue
 				}
+			case "unread":
+				if room.UnreadMessages <= 0 && !state.IsMarkedUnread {
+					continue
+				}
 			}
 		}
 
-		chat, mapErr := s.mapRoomToChat(ctx, room, lookup, chatPreviewParticipants, false, state)
+		chat, mapErr := s.mapRoomToChat(
+			ctx, room, lookup, chatPreviewParticipants, true, state, readKeys[room.ID],
+		)
 		if mapErr != nil {
 			continue
 		}
@@ -1513,8 +1520,8 @@ func parseSearchChatsParams(r *http.Request) (searchChatsParams, error) {
 		return searchChatsParams{}, errs.Validation(map[string]any{"scope": "must be one of: titles, participants"})
 	}
 	inbox := strings.TrimSpace(r.URL.Query().Get("inbox"))
-	if inbox != "" && inbox != "primary" && inbox != "low-priority" && inbox != "archive" {
-		return searchChatsParams{}, errs.Validation(map[string]any{"inbox": "must be one of: primary, low-priority, archive"})
+	if inbox != "" && inbox != "primary" && inbox != "low-priority" && inbox != "archive" && inbox != "unread" {
+		return searchChatsParams{}, errs.Validation(map[string]any{"inbox": "must be one of: primary, low-priority, archive, unread"})
 	}
 	chatType := strings.TrimSpace(r.URL.Query().Get("type"))
 	if chatType == "" {

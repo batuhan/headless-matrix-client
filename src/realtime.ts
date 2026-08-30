@@ -93,6 +93,14 @@ class DefaultEmbeddedRealtimeAdapter extends EventTarget implements EmbeddedReal
     this.send(command);
   }
 
+  setPresence(active: boolean, requestID?: string): void {
+    this.send({
+      type: "presence.set",
+      active,
+      requestID,
+    });
+  }
+
   waitFor<TType extends EmbeddedRealtimeEventType>(
     type: TType,
     options: WaitForEmbeddedEventOptions<Extract<EmbeddedRealtimeEvent, { type: TType }>> = {},

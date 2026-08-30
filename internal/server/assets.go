@@ -20,16 +20,54 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 
+	"maunium.net/go/mautrix/event"
 	"maunium.net/go/mautrix/id"
 
 	"github.com/batuhan/easymatrix/internal/compat"
 	errs "github.com/batuhan/easymatrix/internal/errors"
 )
 
+// encryptedFileRegistry caches EncryptedFile info for mxc URLs so
+// the serve endpoint can decrypt media fetched from the homeserver.
+var (
+	encryptedFileMu       sync.RWMutex
+	encryptedFileRegistry = make(map[string]*event.EncryptedFileInfo)
+)
+
+func registerEncryptedFile(mxcURL string, file *event.EncryptedFileInfo) {
+	if file == nil || mxcURL == "" {
+		return
+	}
+	encryptedFileMu.Lock()
+	encryptedFileRegistry[mxcURL] = file
+	encryptedFileMu.Unlock()
+}
+
+func lookupEncryptedFile(mxcURL string) *event.EncryptedFileInfo {
+	encryptedFileMu.RLock()
+	defer encryptedFileMu.RUnlock()
+	return encryptedFileRegistry[mxcURL]
+}
+
 const maxUploadSizeBytes = int64(500 * 1024 * 1024)
 
 var safeUploadIDPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// uploadAssetResponse is a custom type that omits zero-value fields
+// (the library type includes "error":"" which Swift treats as non-nil error).
+type uploadAssetResponse struct {
+	UploadID string  `json:"uploadID"`
+	SrcURL   string  `json:"srcURL,omitempty"`
+	FileName string  `json:"fileName,omitempty"`
+	MimeType string  `json:"mimeType,omitempty"`
+	FileSize float64 `json:"fileSize,omitempty"`
+	Width    float64 `json:"width,omitempty"`
+	Height   float64 `json:"height,omitempty"`
+	Duration float64 `json:"duration,omitempty"`
+	Error    string  `json:"error,omitempty"`
+}
 
 type uploadMetadata struct {
 	UploadID string  `json:"uploadID"`
@@ -134,7 +172,7 @@ func (s *Server) uploadAsset(w http.ResponseWriter, r *http.Request) error {
 		return errs.Internal(err)
 	}
 
-	return writeJSON(w, compat.UploadAssetOutput{
+	return writeJSON(w, uploadAssetResponse{
 		UploadID: uploadID,
 		SrcURL:   fileURLFromPath(filePath),
 		FileName: fileName,
@@ -229,7 +267,18 @@ func (s *Server) resolveAssetURL(ctx context.Context, raw string) (string, error
 	sum := sha256.Sum256([]byte(normalized))
 	cachePath := filepath.Join(cacheDir, hex.EncodeToString(sum[:]))
 	if _, err := os.Stat(cachePath); err == nil {
-		return cachePath, nil
+		// If encryption info exists for this URL, the cached file may have been
+		// stored before the key was registered (encrypted blob cached as-is).
+		// Validate the cache: if the file doesn't look like decrypted media, discard it.
+		if encFile := lookupEncryptedFile(normalized); encFile != nil {
+			if !looksDecrypted(cachePath) {
+				_ = os.Remove(cachePath)
+			} else {
+				return cachePath, nil
+			}
+		} else {
+			return cachePath, nil
+		}
 	}
 
 	resp, err := s.rt.Client().Client.Download(ctx, parsedMXC)
@@ -238,19 +287,21 @@ func (s *Server) resolveAssetURL(ctx context.Context, raw string) (string, error
 	}
 	defer resp.Body.Close()
 
-	tempPath := cachePath + ".tmp"
-	file, err := os.Create(tempPath)
+	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", fmt.Errorf("failed to create temp asset file: %w", err)
+		return "", fmt.Errorf("failed to read downloaded asset: %w", err)
 	}
-	if _, err = io.Copy(file, resp.Body); err != nil {
-		_ = file.Close()
-		_ = os.Remove(tempPath)
+
+	// Decrypt if we have encryption info for this mxc URL.
+	if encFile := lookupEncryptedFile(normalized); encFile != nil {
+		if decryptErr := encFile.DecryptInPlace(data); decryptErr != nil {
+			return "", fmt.Errorf("failed to decrypt asset: %w", decryptErr)
+		}
+	}
+
+	tempPath := cachePath + ".tmp"
+	if err = os.WriteFile(tempPath, data, 0o600); err != nil {
 		return "", fmt.Errorf("failed to save downloaded asset: %w", err)
-	}
-	if closeErr := file.Close(); closeErr != nil {
-		_ = os.Remove(tempPath)
-		return "", fmt.Errorf("failed to close downloaded asset: %w", closeErr)
 	}
 	if err = os.Rename(tempPath, cachePath); err != nil {
 		_ = os.Remove(tempPath)
@@ -333,6 +384,45 @@ func (s *Server) isAllowedServePath(path string) bool {
 	}
 	return strings.HasPrefix(absPath, uploadRoot+string(os.PathSeparator)) ||
 		strings.HasPrefix(absPath, assetRoot+string(os.PathSeparator))
+}
+
+// looksDecrypted performs a quick sanity check on a cached file.
+// Encrypted media blobs won't start with any known media magic bytes.
+func looksDecrypted(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	header := make([]byte, 12)
+	n, _ := io.ReadFull(f, header)
+	if n < 4 {
+		return false
+	}
+	h := header[:n]
+	switch {
+	case h[0] == 0xFF && h[1] == 0xD8 && h[2] == 0xFF: // JPEG
+		return true
+	case h[0] == 0x89 && h[1] == 'P' && h[2] == 'N' && h[3] == 'G': // PNG
+		return true
+	case h[0] == 'G' && h[1] == 'I' && h[2] == 'F': // GIF
+		return true
+	case h[0] == 'R' && h[1] == 'I' && h[2] == 'F' && h[3] == 'F': // WEBP/WAV
+		return true
+	case n >= 8 && string(h[4:8]) == "ftyp": // MP4/MOV/M4A
+		return true
+	case n >= 4 && h[0] == 0x1A && h[1] == 0x45 && h[2] == 0xDF && h[3] == 0xA3: // WEBM/MKV
+		return true
+	case h[0] == 'O' && h[1] == 'g' && h[2] == 'g' && h[3] == 'S': // OGG
+		return true
+	case h[0] == 'I' && h[1] == 'D' && h[2] == '3': // MP3 (ID3)
+		return true
+	case h[0] == 0xFF && (h[1]&0xE0) == 0xE0: // MP3 (sync)
+		return true
+	case n >= 4 && h[0] == '%' && h[1] == 'P' && h[2] == 'D' && h[3] == 'F': // PDF
+		return true
+	}
+	return false
 }
 
 func randomID() string {

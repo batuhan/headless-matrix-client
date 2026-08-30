@@ -4,6 +4,11 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"go.mau.fi/gomuks/pkg/hicli/database"
+	"go.mau.fi/gomuks/pkg/hicli/jsoncmd"
+	"maunium.net/go/mautrix/event"
+	"maunium.net/go/mautrix/id"
 )
 
 func TestWSProcessRawPayloadRejectsWildcardWithSpecificIDs(t *testing.T) {
@@ -43,6 +48,37 @@ func TestWSProcessRawPayloadRejectsUnknownCommands(t *testing.T) {
 	}
 	if msg.RequestID != "r2" {
 		t.Fatalf("expected requestID to round-trip, got %q", msg.RequestID)
+	}
+}
+
+func TestWSSubscribedTargetsIgnoresPresence(t *testing.T) {
+	hub, _ := newTestWSHub()
+	hub.clients[1].state.chatIDs = []string{wsWildcardSubscriptionChatID}
+
+	targets := hub.subscribedTargets("chat_a")
+	if len(targets) != 1 {
+		t.Fatalf("expected the wildcard subscriber to receive realtime events, got %d targets", len(targets))
+	}
+
+	hub.clients[1].state.chatIDs = []string{"chat_b"}
+	if targets = hub.subscribedTargets("chat_a"); len(targets) != 0 {
+		t.Fatalf("expected no targets for an unsubscribed chat, got %d", len(targets))
+	}
+}
+
+func TestWSProcessRawPayloadRejectsPresenceCommand(t *testing.T) {
+	// presence.set is gone: push is now unconditional and clients decide
+	// locally whether to surface an arriving notification.
+	hub, messages := newTestWSHub()
+
+	err := hub.processRawPayload(1, []byte(`{"type":"presence.set","requestID":"p1","active":false}`))
+	if err != nil {
+		t.Fatalf("processRawPayload returned error: %v", err)
+	}
+
+	msg := decodeWSErrorMessage(t, (*messages)[0])
+	if msg.Code != wsErrorCodeInvalidCommand {
+		t.Fatalf("expected invalid command error, got %q", msg.Code)
 	}
 }
 
@@ -95,6 +131,62 @@ func TestWSDropDuplicateUsesDebounceWindow(t *testing.T) {
 	}
 }
 
+func TestMapSyncCompletePublishesMembershipAsSemanticMessage(t *testing.T) {
+	roomID := id.RoomID("!room:example.com")
+	memberID := "$member-event"
+	stateKey := "@alice:example.com"
+	events := mapSyncCompleteToDomainEvents(&jsoncmd.SyncComplete{
+		Rooms: map[id.RoomID]*jsoncmd.SyncRoom{
+			roomID: {
+				Events: []*database.Event{{
+					RoomID:   roomID,
+					ID:       id.EventID(memberID),
+					Type:     event.StateMember.Type,
+					StateKey: &stateKey,
+				}},
+			},
+		},
+	})
+
+	var foundChat, foundMessage bool
+	for _, domainEvent := range events {
+		switch domainEvent.Type {
+		case wsDomainTypeChatUpserted:
+			foundChat = true
+		case wsDomainTypeMessageUpserted:
+			foundMessage = len(domainEvent.IDs) == 1 && domainEvent.IDs[0] == memberID
+		}
+	}
+	if !foundChat || !foundMessage {
+		t.Fatalf("expected membership sync to publish chat and message upserts, got %#v", events)
+	}
+}
+
+func TestMapSyncCompletePublishesRedactedMessageAsDeletion(t *testing.T) {
+	roomID := id.RoomID("!room:example.com")
+	messageID := id.EventID("$deleted-message")
+	events := mapSyncCompleteToDomainEvents(&jsoncmd.SyncComplete{
+		Rooms: map[id.RoomID]*jsoncmd.SyncRoom{
+			roomID: {
+				Events: []*database.Event{{
+					RoomID:     roomID,
+					ID:         messageID,
+					Type:       event.EventMessage.Type,
+					RedactedBy: "$redaction",
+				}},
+			},
+		},
+	})
+
+	for _, domainEvent := range events {
+		if domainEvent.Type == wsDomainTypeMessageDeleted &&
+			len(domainEvent.IDs) == 1 && domainEvent.IDs[0] == string(messageID) {
+			return
+		}
+	}
+	t.Fatalf("expected redacted message deletion event, got %#v", events)
+}
+
 func newTestWSHub() (*wsHub, *[]any) {
 	messages := make([]any, 0, 1)
 	hub := &wsHub{
@@ -102,10 +194,8 @@ func newTestWSHub() (*wsHub, *[]any) {
 		recentFingerprints: make(map[string]time.Time),
 	}
 	hub.clients[1] = &wsClient{
-		id: 1,
-		state: &wsClientState{
-			chatIDs: []string{},
-		},
+		id:    1,
+		state: &wsClientState{chatIDs: []string{}},
 		send: func(payload any) error {
 			messages = append(messages, payload)
 			return nil

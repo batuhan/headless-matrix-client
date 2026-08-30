@@ -65,6 +65,21 @@ Once running:
 - `MATRIX_USERNAME`: username for password login
 - `MATRIX_PASSWORD`: password for password login
 - `MATRIX_RECOVERY_KEY`: recovery key / passphrase for verification
+- `APNS_KEY_PATH`: path to an APNs `.p8` provider key (optional; enables push delivery)
+- `APNS_KEY_ID`: Apple push key identifier
+- `APNS_TEAM_ID`: Apple Developer team identifier
+- `APNS_TOPIC`: the app bundle ID, for example `com.SilverMarcs.SwiftBeeper`
+- `APNS_ENVIRONMENT`: `sandbox` (default) or `production`
+
+When APNs is configured, authenticated clients can register device tokens with
+`POST /v1/push/devices`, providing `token`, `platform`, and the public
+`serverURL` used by the notification service extension. Registrations are
+persisted inside the gomuks state directory. WebSockets remain the foreground
+live-update transport; APNs handles alerts while Apple platforms suspend the
+app. Push payloads use asset-specific signatures for chat avatars, so the
+server access token is never included in a notification URL. Push alerts mirror
+Relay's local notification policy: muted, archived, and low-priority chats are
+silent, as are outgoing, reaction, membership, duplicate, and stale events.
 
 gomuks-compatible overrides:
 
@@ -273,11 +288,46 @@ Typical event families:
 
 - `ready`
 - `subscriptions.updated`
+- `presence.updated`
 - `chat.upserted`
 - `chat.deleted`
 - `message.upserted`
 - `message.deleted`
 - `error`
+
+Domain events are ordered by a per-connection `seq`. Clients should apply the
+hydrated `entries` directly and refresh REST snapshots only after reconnecting,
+detecting a sequence gap, or receiving an event that could not be hydrated.
+`message.deleted` includes the deleted IDs and, when locally available, hydrated
+message `entries` with the original content and `isDeleted: true`. Message list
+and search responses expose the same additive `isDeleted` field. A server that
+first receives an event after upstream redaction may not have its original
+content. Realtime message entries also include `transactionID` when gomuks has
+one so optimistic sends can reconcile exactly.
+
+Clients can send `{"type":"presence.set","active":false}` while they remain
+connected but are not the active/frontmost app. Inactive subscribers continue
+receiving realtime events, but they do not suppress push delivery. Connections
+that do not report presence retain the legacy behavior and are treated as active.
+This command is available when the `ready` event reports protocol `version: 2`
+or later.
+
+Chat list and search endpoints accept repeated or comma-separated `accountIDs`
+query values. Both return hydrated chat summaries, including the latest preview,
+so clients do not need per-result detail requests. Message membership state is
+returned semantically as `MEMBER_JOIN` or `MEMBER_INVITE` rather than requiring
+clients to inspect localized text.
+
+Authenticated clients can load identity and canonical network metadata in one
+request:
+
+```text
+GET /v1/session
+```
+
+The response contains `user` and `accounts`; each account includes `networkID`,
+the network display name, and server-owned `capabilities` such as
+`unlimitedMessageEdits`.
 
 ## CLI
 

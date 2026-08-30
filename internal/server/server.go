@@ -29,7 +29,8 @@ type Server struct {
 	oauthSubject string
 	oauthState   string
 
-	ws *wsHub
+	ws   *wsHub
+	push *pushService
 }
 
 type apiHandler func(http.ResponseWriter, *http.Request) error
@@ -52,7 +53,14 @@ func New(cfg config.Config, rt *gomuksruntime.Runtime) *Server {
 		log.Printf("failed to load oauth state: %v", err)
 	}
 	s.auth.SetTokenInfoProvider(s.tokenInfoForBearer)
+	s.auth.SetAssetTokenResolver(s.resolveAssetAccessToken)
 	s.ws = newWSHub(s)
+	s.push = newPushService(cfg, rt.StateDir())
+	if s.push.canSend() {
+		if err := s.ws.ensureSubscription(); err != nil {
+			log.Printf("push event subscription will retry when realtime starts: %v", err)
+		}
+	}
 	return s
 }
 
@@ -92,12 +100,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /focus/{chatID}/{messageID}", s.public(s.focusPage))
 
 	s.handle(mux, "GET /v1/accounts", s.getAccounts, false, "read")
+	s.handle(mux, "GET /v1/session", s.getSession, false, "read")
 
 	s.handle(mux, "GET /v1/chats", s.listChats, false, "read")
 	s.handle(mux, "POST /v1/chats", s.createChat, false, "write")
 	s.handle(mux, "GET /v1/chats/{chatID}", s.getChat, false, "read")
 	s.handle(mux, "GET /v1/chats/search", s.searchChats, false, "read")
 	s.handle(mux, "POST /v1/chats/{chatID}/archive", s.archiveChat, false, "write")
+	s.handle(mux, "POST /v1/chats/{chatID}/mute", s.muteChat, false, "write")
+	s.handle(mux, "POST /v1/chats/{chatID}/read", s.markChatRead, false, "write")
 	s.handle(mux, "POST /v1/chats/{chatID}/reminders", s.setChatReminder, false, "write")
 	s.handle(mux, "DELETE /v1/chats/{chatID}/reminders", s.clearChatReminder, false, "write")
 
@@ -106,8 +117,11 @@ func (s *Server) Handler() http.Handler {
 	s.handle(mux, "PUT /v1/chats/{chatID}/messages/{messageID}", s.editMessage, false, "write")
 	s.handle(mux, "POST /v1/chats/{chatID}/messages/{messageID}/reactions", s.addReaction, false, "write")
 	s.handle(mux, "DELETE /v1/chats/{chatID}/messages/{messageID}/reactions", s.removeReaction, false, "write")
+	s.handle(mux, "DELETE /v1/chats/{chatID}/messages/{messageID}", s.deleteMessage, false, "write")
 	s.handle(mux, "GET /v1/messages/search", s.searchMessages, false, "read")
 	s.handle(mux, "GET /v1/ws", s.wsEvents, true, "read")
+	s.handle(mux, "POST /v1/push/devices", s.registerPushDevice, false, "write")
+	s.handle(mux, "DELETE /v1/push/devices/{token}", s.deletePushDevice, false, "write")
 
 	s.handle(mux, "POST /v1/assets/download", s.downloadAsset, false, "read")
 	s.handle(mux, "GET /v1/assets/serve", s.serveAsset, true, "read")

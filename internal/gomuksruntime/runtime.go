@@ -133,21 +133,27 @@ func (r *Runtime) Start(ctx context.Context) error {
 
 	if err := withConfiguredGomuksRoot(r.cfg.StateDir, func() error {
 		gmx.InitDirectories()
+		dataDir, err := filepath.Abs(gmx.DataDir)
+		if err != nil {
+			return fmt.Errorf("failed to resolve gomuks data dir: %w", err)
+		}
+		r.dataDir = dataDir
+
+		if err := gmx.LoadConfig(); err != nil {
+			return fmt.Errorf("failed to load gomuks config: %w", err)
+		}
+		for i := range gmx.Config.Logging.Writers {
+			writer := &gmx.Config.Logging.Writers[i]
+			if string(writer.Type) == "file" {
+				writer.Filename = filepath.Join(r.cfg.StateDir, "logs", "gomuks.log")
+			}
+		}
+		gmx.SetupLog()
+		if err := startClientWithoutExit(gmx); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
-		return err
-	}
-	dataDir, err := filepath.Abs(gmx.DataDir)
-	if err != nil {
-		return fmt.Errorf("failed to resolve gomuks data dir: %w", err)
-	}
-	r.dataDir = dataDir
-
-	if err := gmx.LoadConfig(); err != nil {
-		return fmt.Errorf("failed to load gomuks config: %w", err)
-	}
-	gmx.SetupLog()
-	if err := startClientWithoutExit(gmx); err != nil {
 		return err
 	}
 	r.gmx = gmx
